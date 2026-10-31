@@ -11,8 +11,10 @@ import json
 
 from dividend_vault.db import backup_vault, integrity, load_settings, open_vault
 from dividend_vault.jobs import run_sync
+from dividend_vault.paper import rebalance_market
 from dividend_vault.report import market_status, totals
-from dividend_vault.server import serve
+from dividend_vault.server import _store_backtest, serve
+from dividend_vault.settings import enabled_markets
 from dividend_vault.strategy import run_backtest_pair
 
 
@@ -38,6 +40,9 @@ def main(argv: list[str] | None = None) -> None:
     backtest = sub.add_parser("backtest", help="과거 모의투자")
     backtest.add_argument("--market", default="US")
     backtest.add_argument("--strategy", default=None)
+
+    prepare = sub.add_parser("prepare", help="2배 일봉을 받고 과거 모의와 가상 모의를 마칩니다")
+    prepare.add_argument("--markets", default="", help="예: US,KR,GB")
 
     sub.add_parser("backup", help="오늘 백업이 없으면 하나 만듭니다")
 
@@ -85,6 +90,25 @@ def main(argv: list[str] | None = None) -> None:
         finally:
             conn.close()
         print(json.dumps({"metrics": result["metrics"], "baseline": result["baseline"]}, ensure_ascii=False, indent=2))
+        return
+    if args.command == "prepare":
+        markets = [item.strip().upper() for item in args.markets.split(",") if item.strip()] or None
+        sync_result = run_sync(markets, False, _print_progress)
+        print(json.dumps(sync_result, ensure_ascii=False, indent=2))
+        conn = open_vault()
+        try:
+            settings = load_settings(conn)
+            for market in enabled_markets(settings, markets):
+                code = market["code"]
+                try:
+                    result = run_backtest_pair(conn, code, settings, settings["strategy"])
+                    _store_backtest(conn, result)
+                    paper = rebalance_market(conn, code, settings, settings["strategy"])
+                    print(f"{market['name']} 과거 모의와 가상 모의를 마쳤습니다. 주문 {len(paper.get('orders') or [])}건", flush=True)
+                except Exception as exc:
+                    print(f"{market['name']} 모의 실패: {exc}", flush=True)
+        finally:
+            conn.close()
         return
     if args.command == "backup":
         conn = open_vault()

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from dividend_vault.paths import BACKUPS, DB_PATH, SCHEMA_PATH, ensure_dirs
-from dividend_vault.settings import dump_settings, normalize_settings
+from dividend_vault.settings import FLOOR_VERSION, HOLDING_FLOORS, dump_settings, normalize_settings
 
 BAR_FIELDS = ("open", "high", "low", "close", "adj_close", "volume")
 
@@ -60,6 +60,20 @@ def load_settings(conn: sqlite3.Connection) -> dict[str, Any]:
     row = conn.execute("SELECT value FROM meta WHERE key='settings'").fetchone()
     raw = json.loads(row["value"]) if row else None
     settings = normalize_settings(raw)
+    marker = conn.execute("SELECT value FROM meta WHERE key='holding_floor'").fetchone()
+    if marker is None or marker["value"] != FLOOR_VERSION:
+        for market in settings["markets"]:
+            minimum, target = HOLDING_FLOORS[market["code"]]
+            market["min_symbols"] = minimum
+            market["target_symbols"] = target
+            market["enabled"] = True
+        save_settings(conn, settings)
+        conn.execute(
+            "INSERT INTO meta(key, value) VALUES('holding_floor', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (FLOOR_VERSION,),
+        )
+        conn.commit()
+        return settings
     if row is None or dump_settings(raw or {}) != dump_settings(settings):
         save_settings(conn, settings)
     return settings

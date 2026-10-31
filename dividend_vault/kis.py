@@ -38,6 +38,8 @@ ORDER_TR = {
 }
 
 CONFIRM = {"paper": "모의주문확인", "live": "실전주문확인"}
+MARKET_CODES = ("US", "CN", "HK", "JP", "VN", "KR", "GB")
+MARKET_NAMES = {"US": "미국", "CN": "중국", "HK": "홍콩", "JP": "일본", "VN": "베트남", "KR": "한국", "GB": "영국"}
 
 
 class KisError(RuntimeError):
@@ -55,14 +57,48 @@ def _write(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _load() -> dict[str, Any]:
+    data = _read(ACCOUNTS_PATH, {"accounts": [], "selected": {}})
+    if not isinstance(data, dict):
+        data = {"accounts": [], "selected": {}}
+    data.setdefault("accounts", [])
+    data.setdefault("selected", {})
+    return data
+
+
+def _save(data: dict[str, Any]) -> None:
+    _write(ACCOUNTS_PATH, data)
+
+
 def list_accounts() -> list[dict[str, Any]]:
-    return list(_read(ACCOUNTS_PATH, {"accounts": []}).get("accounts") or [])
+    return list(_load().get("accounts") or [])
+
+
+def _markets_of(account: dict[str, Any]) -> list[str]:
+    raw = account.get("markets")
+    if not raw:
+        return list(MARKET_CODES)
+    return [code for code in raw if code in MARKET_CODES]
+
+
+def _clean_markets(value: Any) -> list[str]:
+    if isinstance(value, str):
+        value = [part.strip().upper() for part in value.split(",")]
+    codes = []
+    for item in value or []:
+        code = str(item).strip().upper()
+        if code in MARKET_CODES and code not in codes:
+            codes.append(code)
+    return codes
 
 
 def public_accounts() -> list[dict[str, Any]]:
+    data = _load()
+    selected = data.get("selected") or {}
     view = []
-    for account in list_accounts():
+    for account in data.get("accounts") or []:
         number = str(account.get("account_no") or "")
+        markets = _markets_of(account)
         view.append(
             {
                 "id": account["id"],
@@ -70,9 +106,29 @@ def public_accounts() -> list[dict[str, Any]]:
                 "mode": account.get("mode"),
                 "account_masked": ("*" * max(0, len(number) - 4)) + number[-4:],
                 "product_code": account.get("product_code") or "01",
+                "markets": markets,
+                "market_names": [MARKET_NAMES[code] for code in markets],
+                "us_exchange": account.get("us_exchange") or "NASD",
+                "vn_exchange": account.get("vn_exchange") or "VNSE",
+                "selected_markets": [code for code, account_id in selected.items() if account_id == account["id"]],
                 "created_at": account.get("created_at"),
             }
         )
+    return view
+
+
+def selection_view() -> dict[str, Any]:
+    data = _load()
+    by_id = {account["id"]: account for account in data.get("accounts") or []}
+    view = {}
+    for code in MARKET_CODES:
+        account = by_id.get((data.get("selected") or {}).get(code))
+        view[code] = None if account is None else {
+            "id": account["id"],
+            "alias": account.get("alias"),
+            "mode": account.get("mode"),
+            "name": MARKET_NAMES[code],
+        }
     return view
 
 
@@ -83,9 +139,18 @@ def add_account(payload: dict[str, Any]) -> dict[str, Any]:
     app_key = str(payload.get("app_key") or "").strip()
     app_secret = str(payload.get("app_secret") or "").strip()
     account_no = str(payload.get("account_no") or "").strip()
+    markets = _clean_markets(payload.get("markets"))
     if not app_key or not app_secret or len(account_no) < 8:
         raise KisError("앱키, 앱시크릿, 계좌번호 8자리를 입력하세요.")
-    accounts = list_accounts()
+    if not markets:
+        raise KisError("나라는 최소 1개를 고르세요. 한 계좌에 미국 중국 홍콩 일본 베트남 한국 영국을 모두 넣을 수 있습니다.")
+    us_exchange = str(payload.get("us_exchange") or "NASD").upper()
+    if us_exchange not in {"NASD", "NYSE", "AMEX"}:
+        raise KisError("미국 거래소는 NASD, NYSE, AMEX 중 하나입니다.")
+    vn_exchange = str(payload.get("vn_exchange") or "VNSE").upper()
+    if vn_exchange not in {"VNSE", "HASE"}:
+        raise KisError("베트남 거래소는 HOSE(VNSE) 또는 HNX(HASE) 입니다.")
+    data = _load()
     row = {
         "id": uuid.uuid4().hex,
         "alias": str(payload.get("alias") or ("모의" if mode == "paper" else "실전")),
@@ -93,17 +158,39 @@ def add_account(payload: dict[str, Any]) -> dict[str, Any]:
         "app_key": app_key,
         "app_secret": app_secret,
         "account_no": account_no[:8],
-        "product_code": str(payload.get("product_code") or "01")[:2],
+        "product_code": str(payload.get("product_code") or "01")[:2] or "01",
+        "markets": markets,
+        "us_exchange": us_exchange,
+        "vn_exchange": vn_exchange,
         "created_at": utc_now(),
     }
-    accounts.append(row)
-    _write(ACCOUNTS_PATH, {"accounts": accounts})
+    data["accounts"].append(row)
+    selected = data["selected"]
+    for code in markets:
+        if payload.get("select") or not selected.get(code):
+            selected[code] = row["id"]
+    _save(data)
     return public_accounts()[-1]
 
 
+def select_account(account_id: str, market: str) -> dict[str, Any]:
+    code = str(market or "").upper()
+    if code not in MARKET_CODES:
+        raise KisError("나라는 US CN HK JP VN KR GB 중 하나입니다.")
+    account = _account(account_id)
+    if code not in _markets_of(account):
+        raise KisError(f"이 계좌에는 {MARKET_NAMES[code]}이 연결되어 있지 않습니다.")
+    data = _load()
+    data["selected"][code] = account_id
+    _save(data)
+    return selection_view()
+
+
 def delete_account(account_id: str) -> None:
-    accounts = [row for row in list_accounts() if row["id"] != account_id]
-    _write(ACCOUNTS_PATH, {"accounts": accounts})
+    data = _load()
+    data["accounts"] = [row for row in data["accounts"] if row["id"] != account_id]
+    data["selected"] = {code: chosen for code, chosen in data["selected"].items() if chosen != account_id}
+    _save(data)
 
 
 def _account(account_id: str) -> dict[str, Any]:
@@ -117,11 +204,48 @@ def _base(mode: str) -> str:
     return PAPER if mode == "paper" else REAL
 
 
+def _token_key(account: dict[str, Any]) -> str:
+    return f"{account['mode']}|{account['app_key']}"
+
+
+def fresh_token(slot: dict[str, Any] | None, now: float) -> str | None:
+    if not slot:
+        return None
+    token = slot.get("access_token")
+    if token and float(slot.get("expires_at") or 0) > now + 60:
+        return str(token)
+    return None
+
+
 def _token(account: dict[str, Any]) -> str:
     cache = _read(TOKEN_PATH, {})
-    slot = cache.get(account["id"]) or {}
-    if slot.get("access_token") and float(slot.get("expires_at") or 0) > time.time() + 60:
-        return slot["access_token"]
+    now = time.time()
+    key = _token_key(account)
+    slot = cache.get(key) if isinstance(cache.get(key), dict) else None
+    token = fresh_token(slot, now)
+    if token is None:
+        legacy = cache.get(account["id"]) if isinstance(cache.get(account["id"]), dict) else None
+        token = fresh_token(legacy, now)
+        slot = legacy
+    if token is None:
+        for item in cache.values():
+            if not isinstance(item, dict):
+                continue
+            if item.get("app_key") == account["app_key"] and item.get("mode", account["mode"]) == account["mode"]:
+                token = fresh_token(item, now)
+                if token:
+                    slot = item
+                    break
+    if token:
+        cache[key] = {
+            "access_token": token,
+            "issued_at": (slot or {}).get("issued_at") or now,
+            "expires_at": (slot or {}).get("expires_at"),
+            "app_key": account["app_key"],
+            "mode": account["mode"],
+        }
+        _write(TOKEN_PATH, cache)
+        return token
     response = httpx.post(
         _base(account["mode"]) + "/oauth2/tokenP",
         json={
@@ -135,9 +259,12 @@ def _token(account: dict[str, Any]) -> str:
     token = body.get("access_token")
     if response.status_code != 200 or not token:
         raise KisError(body.get("error_description") or body.get("msg1") or "토큰 발급 실패")
-    cache[account["id"]] = {
+    cache[key] = {
         "access_token": token,
-        "expires_at": time.time() + int(body.get("expires_in") or 3600),
+        "issued_at": now,
+        "expires_at": now + int(body.get("expires_in") or 86400),
+        "app_key": account["app_key"],
+        "mode": account["mode"],
     }
     _write(TOKEN_PATH, cache)
     return token
@@ -215,7 +342,7 @@ def _board(market: str, symbol: str, exchange: str | None) -> tuple[str, str, st
         ovrs = "SHAA" if group == "CN_SS" else "SZAA"
         return group, code, ovrs
     if market == "VN":
-        ovrs = "HASE" if (exchange or "").upper() == "HNX" else "VNSE"
+        ovrs = "HASE" if (exchange or "").upper() in {"HNX", "HASE"} else "VNSE"
         return "VN", code, ovrs
     board = (exchange or "").upper()
     if board in {"NYQ", "NYS", "NYSE"}:
@@ -233,12 +360,20 @@ def _price_text(market: str, price: float) -> str:
 
 
 def place_order(conn, payload: dict[str, Any]) -> dict[str, Any]:
+    from dividend_vault.readiness import live_block_reason, loss_sell_reason
+
     account = _account(str(payload.get("account_id")))
     mode = account["mode"]
     confirm = str(payload.get("confirm") or "")
     if confirm != CONFIRM[mode]:
         raise KisError(f"{'실전' if mode == 'live' else '모의'} 주문은 확인 문구 '{CONFIRM[mode]}'가 있어야 전송됩니다.")
-    market = str(payload.get("market") or "")
+    if mode == "live":
+        blocked = live_block_reason(conn)
+        if blocked:
+            raise KisError(blocked)
+    market = str(payload.get("market") or "").upper()
+    if market not in _markets_of(account):
+        raise KisError("이 계좌에는 그 나라가 연결되어 있지 않습니다.")
     symbol = str(payload.get("symbol") or "")
     side = str(payload.get("side") or "")
     if side not in {"buy", "sell"}:
@@ -249,8 +384,16 @@ def place_order(conn, payload: dict[str, Any]) -> dict[str, Any]:
         raise KisError("한국투자증권 주문 수량은 1주 이상의 정수입니다. 소수점 비중은 가상모의에서만 사용합니다.")
     if price <= 0:
         raise KisError("지정가 가격이 필요합니다. 모의투자는 지정가만 허용되는 시장이 있습니다.")
+    if side == "sell":
+        blocked = loss_sell_reason(conn, account, market, symbol, qty, price)
+        if blocked:
+            raise KisError(blocked)
     row = conn.execute("SELECT exchange FROM symbols WHERE symbol=?", (symbol,)).fetchone()
-    exchange = row["exchange"] if row else payload.get("exchange")
+    exchange = (row["exchange"] if row else None) or payload.get("exchange")
+    if market == "US" and not exchange:
+        exchange = account.get("us_exchange") or "NASD"
+    if market == "VN" and not exchange:
+        exchange = account.get("vn_exchange") or "VNSE"
     group, product, ovrs = _board(market, symbol, exchange)
     real_tr, paper_tr = ORDER_TR[(group, side)]
     tr_id = paper_tr if mode == "paper" else real_tr

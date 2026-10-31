@@ -10,6 +10,8 @@ from datetime import date, timedelta
 from statistics import mean, pstdev
 from typing import Any
 
+from dividend_vault.costs import charge
+from dividend_vault.dividend_exit import event_from_lists
 from dividend_vault.settings import market_by_code
 
 
@@ -272,6 +274,13 @@ def _pick(rows: list[dict[str, Any]], scores: list[float], min_yield: float, max
 
 
 
+def _take_profit(market: str, shares: float, price: float | None, entry: float | None) -> bool:
+    if price is None or price != price or entry is None or shares <= 0 or price <= entry:
+        return False
+    fee = charge(market, "sell", shares * price)
+    return (price - entry) * shares - fee > 0
+
+
 def _replay(
     histories: list[History],
     days: list[str],
@@ -288,6 +297,9 @@ def _replay(
     train_x: list[list[float]] = []
     train_y: list[float] = []
     equity = 1.0
+    cash = 0.0
+    entries: dict[str, float] = {}
+    blocked: set[str] = set()
     units: dict[str, float] = {}
     curve: list[dict[str, Any]] = []
     turnovers: list[float] = []
@@ -295,7 +307,7 @@ def _replay(
     anomalies = 0
     last_holdings: list[dict[str, Any]] = []
     note = ""
-    fee = float(settings["fee_bps"]) / 10000.0
+    fee_rate = float(settings["fee_bps"]) / 10000.0
     cap = float(settings["weight_cap"])
     next_rebalance = 0
 
@@ -303,7 +315,27 @@ def _replay(
         value = aligned[symbol][index]
         return value
 
+    cut_ratio = float(settings.get("dividend_cut_ratio", 0.2))
     for index in range(step_indexes[0], len(days)):
+        if settings.get("dividend_exit", True):
+            for symbol in list(units):
+                history = by_symbol[symbol]
+                kind = event_from_lists(history.div_dates, history.div_amounts, days[index], cut_ratio)
+                price = aligned[symbol][index]
+                entry = entries.get(symbol)
+                if kind is None:
+                    blocked.discard(symbol)
+                    continue
+                blocked.add(symbol)
+                if price is None or price != price or entry is None:
+                    continue
+                shares = units[symbol]
+                sell_fee = charge(market["code"], "sell", shares * price)
+                if (price - entry) * shares - sell_fee <= 0:
+                    continue
+                cash += shares * price - sell_fee
+                units.pop(symbol)
+                entries.pop(symbol, None)
         if next_rebalance < len(step_indexes) and index == step_indexes[next_rebalance]:
             day = days[index]
             current = []
@@ -312,7 +344,7 @@ def _replay(
                 if key not in feature_cache:
                     feature_cache[key] = _features(history, day)
                 row = feature_cache[key]
-                if row is not None:
+                if row is not None and history.symbol not in blocked:
                     current.append((history, row))
             prediction = None
             if strategy == "learned_tilt":
@@ -340,13 +372,22 @@ def _replay(
                         1 if strategy == "equal" else cap,
                     )
                     marked = _mark(units, aligned, index, [0])
-                    if marked > 0:
-                        equity = marked
+                    if marked + cash > 0:
+                        equity = marked + cash
+                    parked = {
+                        symbol: shares
+                        for symbol, shares in units.items()
+                        if symbol in blocked or not _take_profit(market["code"], shares, price_at(symbol, index), entries.get(symbol))
+                    }
+                    parked_value = sum((price_at(symbol, index) or 0) * shares for symbol, shares in parked.items())
+                    tradable = max(0.0, equity - parked_value)
                     old = {}
-                    if units and equity > 0:
+                    if tradable > 0:
                         for symbol, shares in units.items():
+                            if symbol in parked:
+                                continue
                             price = price_at(symbol, index) or 0
-                            old[symbol] = shares * price / equity
+                            old[symbol] = shares * price / tradable
                     new = {
                         current[item][0].symbol: weight
                         for item, weight in zip(chosen, weights)
@@ -357,14 +398,16 @@ def _replay(
                         turnover = sum(new.values())
                     else:
                         turnover = sum(abs(new.get(name, 0) - old.get(name, 0)) for name in names) / 2
-                    equity *= max(0.0, 1 - turnover * fee)
-                    units = {}
+                    tradable *= max(0.0, 1 - turnover * fee_rate)
+                    prior_units = dict(units)
+                    units = dict(parked)
                     holdings = []
                     for symbol, weight in new.items():
                         price = price_at(symbol, index)
                         if not price:
                             continue
-                        units[symbol] = equity * weight / price
+                        if symbol not in parked:
+                            units[symbol] = tradable * weight / price
                         holdings.append(
                             {
                                 "symbol": symbol,
@@ -376,6 +419,18 @@ def _replay(
                     turnovers.append(turnover)
                     holding_counts.append(len(holdings))
                     last_holdings = holdings
+                    for symbol, shares in units.items():
+                        price = price_at(symbol, index)
+                        previous_shares = prior_units.get(symbol, 0.0)
+                        previous = entries.get(symbol)
+                        if price and (previous is None or previous_shares <= 0):
+                            entries[symbol] = price
+                        elif price and previous is not None and shares > previous_shares:
+                            entries[symbol] = (previous_shares * previous + (shares - previous_shares) * price) / shares
+                    for symbol in list(entries):
+                        if symbol not in units:
+                            entries.pop(symbol, None)
+                    cash = 0.0
             if next_rebalance + 1 < len(step_indexes):
                 future = days[step_indexes[next_rebalance + 1]]
                 for history, row in current:
@@ -391,8 +446,8 @@ def _replay(
 
         marked = _mark(units, aligned, index, anomalies_box := [anomalies])
         anomalies = anomalies_box[0]
-        if marked > 0:
-            equity = marked
+        if marked + cash > 0:
+            equity = marked + cash
             curve.append({"date": days[index], "equity": equity})
 
     metrics = _metrics(curve, turnovers, holding_counts, anomalies, len(train_x))

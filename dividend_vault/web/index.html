@@ -65,7 +65,7 @@
   <section class="layout">
     <div class="panel">
       <h2>보유 조건</h2>
-      <p class="muted">최소 보유와 목표 보유를 바꿉니다. 목표는 최소의 1배에서 5배 사이로만 저장됩니다. ETP는 주식 수에 포함하지 않고 따로 붙입니다.</p>
+      <p class="muted">최소 보유는 미국 1000, 중국·일본·한국 250, 홍콩 150, 베트남·영국 50입니다. 일봉 목표는 그 2배에서 5배이고, 받는 기간은 최대 10년입니다. 이 일봉과 과거 모의, 가상 모의가 끝나기 전에는 실전 주문이 열리지 않습니다.</p>
       <div id="market-form"></div>
       <div class="row">
         <label>최소 배당 %<input id="minYield" type="number" step="0.1"></label>
@@ -73,7 +73,7 @@
         <label>최소 거래량<input id="minVolume" type="number" step="1000"></label>
         <label>수수료 bps<input id="fee" type="number" step="1"></label>
         <label>학습 비중<input id="modelWeight" type="number" step="0.05" min="0" max="1"></label>
-        <label>확장 한도<input id="expansion" type="number" step="1" min="1" max="5"></label>
+        <label>확장 한도<input id="expansion" type="number" step="1" min="2" max="5"></label>
       </div>
       <div class="row">
         <label><input id="etp" type="checkbox"> ETP 포함</label>
@@ -85,7 +85,7 @@
       <div class="row">
         <button id="save" type="button">조건 저장</button>
         <button id="preset" class="quiet" type="button">목표를 5배로</button>
-        <button id="sync" type="button">5개국 우선 일봉 받기</button>
+        <button id="sync" type="button">7개국 10년 일봉 받기</button>
         <button id="syncAll" class="quiet" type="button">켠 시장 모두 받기</button>
         <label><input id="force" type="checkbox"> 오늘 받은 종목도 다시</label>
       </div>
@@ -136,12 +136,22 @@
         </select>
         <button id="rebalance" type="button">종가로 리밸런스</button>
       </div>
+      <p class="muted">배당이 20% 이상 줄거나 최근 1년 무배당이 되면, 한투 온라인 수수료와 세금 뒤에도 이익인 수량만 바로 팝니다. 손실이면 보유합니다. 가격이 내린 것만으로는 손절하지 않습니다. 베트남 신규 매수는 최소 2억 동입니다.</p>
       <div id="paper"></div>
     </div>
   </section>
   <section class="panel">
     <h2>한국투자증권</h2>
-    <p class="muted">모의 키와 실전 키는 다릅니다. 키는 이 컴퓨터의 secrets 폴더에만 저장됩니다. 영국 주식은 주문 거래소 코드가 없어 데이터와 가상 모의만 됩니다.</p>
+    <p class="muted">모의와 실전은 앱키가 달라 계좌를 따로 추가합니다. 한 계좌에 7개국을 모두 넣을 수 있고, 나라는 최소 1개입니다. 같은 앱키 토큰은 한 번만 받아 만료 전까지 다시 받습니다. 키는 이 컴퓨터의 secrets 폴더에만 저장됩니다. 영국은 데이터와 가상 모의만 됩니다. 중국은 종목 접미사가 .SS면 상해, .SZ면 심천입니다.</p>
+    <div class="row" id="kisMarkets">
+      <label><input type="checkbox" value="US" checked>미국</label>
+      <label><input type="checkbox" value="CN">중국</label>
+      <label><input type="checkbox" value="HK">홍콩</label>
+      <label><input type="checkbox" value="JP">일본</label>
+      <label><input type="checkbox" value="VN">베트남</label>
+      <label><input type="checkbox" value="KR">한국</label>
+      <label><input type="checkbox" value="GB">영국</label>
+    </div>
     <div class="row">
       <label>별칭<input id="kisAlias"></label>
       <label>구분<select id="kisMode"><option value="paper">모의</option><option value="live">실전</option></select></label>
@@ -149,8 +159,13 @@
       <label>앱시크릿<input id="kisSecret" type="password"></label>
       <label>계좌 8자리<input id="kisAccount"></label>
       <label>상품코드<input id="kisProduct" value="01"></label>
+      <label>미국 거래소<select id="kisUs"><option>NASD</option><option>NYSE</option><option>AMEX</option></select></label>
+      <label>베트남<select id="kisVn"><option value="VNSE">HOSE</option><option value="HASE">HNX</option></select></label>
+      <label><input id="kisAssign" type="checkbox" checked>고른 나라의 주문 계좌로 지정</label>
+      <button id="kisAll" class="quiet" type="button">7개국 모두</button>
       <button id="kisAdd" type="button">계좌 추가</button>
     </div>
+    <div id="kisSelected" class="muted"></div>
     <div id="kisList"></div>
     <div class="row">
       <label>계좌<select id="kisPick"></select></label>
@@ -229,7 +244,7 @@ function render(data) {
   const integrity = data.integrity || {};
   $("integrity").textContent = `깨진 봉 ${integrity.broken_bars} · 가격 개정 ${integrity.bar_revisions} · 배당 개정 ${integrity.dividend_revisions} · 백업 ${integrity.backup_count}개. ${integrity.note || ""}`;
   document.querySelectorAll("button").forEach((button) => { button.disabled = state.jobRunning && button.id !== "search"; });
-  renderKis(data.kis || []);
+  renderKis(data.kis || [], data.kis_selected || {});
 }
 
 function collect() {
@@ -258,9 +273,19 @@ function collect() {
   return settings;
 }
 
-function renderKis(accounts) {
-  $("kisList").innerHTML = accounts.map((account) => `<div>${account.alias} · ${account.mode === "live" ? "실전" : "모의"} · ${account.account_masked} <button class="quiet" data-kis-ping="${account.id}" type="button">토큰</button> <button class="quiet" data-kis-del="${account.id}" type="button">삭제</button></div>`).join("") || `<span class="muted">등록된 계좌가 없습니다.</span>`;
-  $("kisPick").innerHTML = accounts.map((account) => `<option value="${account.id}">${account.alias}</option>`).join("");
+function renderKis(accounts, selected) {
+  const names = { US: "미국", CN: "중국", HK: "홍콩", JP: "일본", VN: "베트남", KR: "한국", GB: "영국" };
+  $("kisSelected").textContent = Object.keys(names).map((code) => {
+    const row = selected[code];
+    return `${names[code]} ${row ? row.alias + (row.mode === "live" ? " 실전" : " 모의") : "없음"}`;
+  }).join(" · ");
+  $("kisList").innerHTML = accounts.map((account) => {
+    const picks = (account.markets || []).map((code) => `<button class="quiet" data-kis-select="${account.id}" data-kis-market="${code}" type="button">${names[code] || code} 주문</button>`).join(" ");
+    const linked = (account.market_names || []).join(" ");
+    const active = (account.selected_markets || []).map((code) => names[code] || code).join(" ");
+    return `<div>${account.alias} · ${account.mode === "live" ? "실전" : "모의"} · ${account.account_masked} · 상품 ${account.product_code} · ${linked} · 미국 ${account.us_exchange} · 베트남 ${account.vn_exchange === "HASE" ? "HNX" : "HOSE"}${active ? " · 주문지정 " + active : ""} ${picks} <button class="quiet" data-kis-ping="${account.id}" type="button">토큰</button> <button class="quiet" data-kis-del="${account.id}" type="button">삭제</button></div>`;
+  }).join("") || `<span class="muted">등록된 계좌가 없습니다.</span>`;
+  $("kisPick").innerHTML = accounts.map((account) => `<option value="${account.id}">${account.alias} · ${(account.market_names || []).join(" ")}</option>`).join("");
 }
 
 function chart(points, color) {
@@ -309,7 +334,7 @@ $("preset").onclick = () => {
     input.value = Math.round(market.min_symbols * Number($("expansion").value || 5));
   });
 };
-$("sync").onclick = async () => { await post("/api/settings", collect()); await post("/api/jobs/sync", { markets: ["US", "CN", "HK", "JP", "VN"], force: $("force").checked }); refresh(); };
+$("sync").onclick = async () => { await post("/api/settings", collect()); await post("/api/jobs/sync", { markets: ["US", "CN", "HK", "JP", "VN", "KR", "GB"], force: $("force").checked }); refresh(); };
 $("syncAll").onclick = async () => { await post("/api/settings", collect()); await post("/api/jobs/sync", { force: $("force").checked }); refresh(); };
 $("backup").onclick = async () => { await post("/api/jobs/backup", {}); refresh(); };
 $("search").onclick = () => loadSymbols().catch((error) => alert(error.message));
@@ -332,10 +357,21 @@ $("rebalance").onclick = async () => {
     if (!job.running) { clearInterval(wait); showPaper().catch(() => {}); refresh(); }
   }, 1500);
 };
+$("kisAll").onclick = () => {
+  document.querySelectorAll("#kisMarkets input").forEach((input) => { input.checked = true; });
+};
+document.querySelectorAll("#kisMarkets input").forEach((input) => {
+  input.addEventListener("change", () => {
+    if (document.querySelectorAll("#kisMarkets input:checked").length === 0) input.checked = true;
+  });
+});
 $("kisAdd").onclick = async () => {
+  const markets = [...document.querySelectorAll("#kisMarkets input:checked")].map((input) => input.value);
+  if (markets.length === 0) return;
   await post("/api/kis/accounts", {
     alias: $("kisAlias").value, mode: $("kisMode").value, app_key: $("kisKey").value,
-    app_secret: $("kisSecret").value, account_no: $("kisAccount").value, product_code: $("kisProduct").value
+    app_secret: $("kisSecret").value, account_no: $("kisAccount").value, product_code: $("kisProduct").value,
+    markets, us_exchange: $("kisUs").value, vn_exchange: $("kisVn").value, select: $("kisAssign").checked
   });
   $("kisSecret").value = "";
   refresh();
@@ -351,7 +387,12 @@ $("kisOrder").onclick = async () => {
 document.body.addEventListener("click", async (event) => {
   const ping = event.target.dataset.kisPing;
   const remove = event.target.dataset.kisDel;
+  const selectId = event.target.dataset.kisSelect;
   if (ping) $("kisOut").textContent = JSON.stringify(await post("/api/kis/ping", { account_id: ping }), null, 2);
+  if (selectId) {
+    await post("/api/kis/select", { account_id: selectId, market: event.target.dataset.kisMarket });
+    refresh();
+  }
   if (remove) { await fetch(`/api/kis/accounts/${remove}`, { method: "DELETE" }); refresh(); }
 });
 refresh().then(loadSymbols);

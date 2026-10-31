@@ -1,7 +1,9 @@
 package com.takin1217.dividendvault.sync
 
 import android.content.Context
+import com.takin1217.dividendvault.Phase
 import com.takin1217.dividendvault.VaultApp
+import com.takin1217.dividendvault.notify.VaultNotifier
 import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
@@ -25,18 +27,23 @@ class SyncEngine(context: Context) {
         .build()
     private val json = "application/json".toMediaType()
 
-    fun syncSelected(force: Boolean) {
+    fun syncSelected(force: Boolean): Int {
         val db = app.database.writableDatabase
         val today = LocalDate.now().toString()
         val symbols = mutableListOf<String>()
+        var failed = 0
+        app.phase.value = Phase.Running
         db.rawQuery(
             "SELECT symbol FROM symbols WHERE selected=1 OR instrument='BENCHMARK' ORDER BY market, pool_rank",
             null,
         ).use { cursor ->
             while (cursor.moveToNext()) symbols += cursor.getString(0)
         }
+        val notifier = VaultNotifier(app)
         symbols.forEachIndexed { index, symbol ->
+            app.phase.value = Phase.Running
             app.status.value = "${index + 1}/${symbols.size} $symbol"
+            notifier.progress("일봉 수신", app.status.value)
             if (!force) {
                 db.rawQuery("SELECT status, last_success FROM sync_state WHERE symbol=?", arrayOf(symbol)).use { cursor ->
                     if (cursor.moveToFirst() && cursor.getString(0) == "ok" && (cursor.getString(1) ?: "").startsWith(today)) {
@@ -74,6 +81,8 @@ class SyncEngine(context: Context) {
                     db.endTransaction()
                 }
             } catch (error: Exception) {
+                failed += 1
+                app.phase.value = Phase.Error
                 db.execSQL(
                     "INSERT INTO sync_state(symbol, bar_count, div_count, last_attempt, last_error, status) VALUES(?,0,0,?,?,'error') " +
                         "ON CONFLICT(symbol) DO UPDATE SET last_attempt=excluded.last_attempt, last_error=excluded.last_error, status='error'",
@@ -82,7 +91,13 @@ class SyncEngine(context: Context) {
             }
             Thread.sleep(350)
         }
-        app.status.value = "동기화 완료 ${symbols.size}종목"
+        app.phase.value = if (failed == 0) Phase.Done else Phase.Error
+        app.status.value = if (symbols.isEmpty()) {
+            "받을 종목이 없습니다. 금고를 가져오면 이어서 받습니다."
+        } else {
+            "동기화 ${symbols.size}종목, 오류 $failed"
+        }
+        return failed
     }
 
     private fun upsertBar(db: android.database.sqlite.SQLiteDatabase, symbol: String, bar: Bar) {

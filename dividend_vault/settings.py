@@ -1,4 +1,4 @@
-"""Editable research settings. Minimum holdings can change; the pool stops at 5x."""
+"""Editable research settings. Targets stay between 2x and 5x the minimum holding."""
 
 from __future__ import annotations
 
@@ -7,6 +7,17 @@ from copy import deepcopy
 from typing import Any
 
 EXPANSION_MAX = 5.0
+EXPANSION_MIN = 2.0
+HOLDING_FLOORS = {
+    "US": (1000, 2000),
+    "CN": (250, 500),
+    "HK": (150, 300),
+    "JP": (250, 500),
+    "VN": (50, 100),
+    "KR": (250, 500),
+    "GB": (50, 100),
+}
+FLOOR_VERSION = "20261031-2x"
 
 MARKET_DEFAULTS: list[dict[str, Any]] = [
     {
@@ -14,7 +25,7 @@ MARKET_DEFAULTS: list[dict[str, Any]] = [
         "name": "미국",
         "enabled": True,
         "min_symbols": 1000,
-        "target_symbols": 1000,
+        "target_symbols": 2000,
         "min_market_cap": 300_000_000,
         "currency": "USD",
         "paper_cash": 1_000_000,
@@ -27,7 +38,7 @@ MARKET_DEFAULTS: list[dict[str, Any]] = [
         "name": "중국",
         "enabled": True,
         "min_symbols": 250,
-        "target_symbols": 250,
+        "target_symbols": 500,
         "min_market_cap": 5_000_000_000,
         "currency": "CNY",
         "paper_cash": 5_000_000,
@@ -40,7 +51,7 @@ MARKET_DEFAULTS: list[dict[str, Any]] = [
         "name": "홍콩",
         "enabled": True,
         "min_symbols": 150,
-        "target_symbols": 150,
+        "target_symbols": 300,
         "min_market_cap": 5_000_000_000,
         "currency": "HKD",
         "paper_cash": 5_000_000,
@@ -53,7 +64,7 @@ MARKET_DEFAULTS: list[dict[str, Any]] = [
         "name": "일본",
         "enabled": True,
         "min_symbols": 250,
-        "target_symbols": 250,
+        "target_symbols": 500,
         "min_market_cap": 50_000_000_000,
         "currency": "JPY",
         "paper_cash": 100_000_000,
@@ -66,7 +77,7 @@ MARKET_DEFAULTS: list[dict[str, Any]] = [
         "name": "베트남",
         "enabled": True,
         "min_symbols": 50,
-        "target_symbols": 50,
+        "target_symbols": 100,
         "min_market_cap": 0,
         "currency": "VND",
         "paper_cash": 10_000_000_000,
@@ -77,9 +88,9 @@ MARKET_DEFAULTS: list[dict[str, Any]] = [
     {
         "code": "KR",
         "name": "한국",
-        "enabled": False,
-        "min_symbols": 150,
-        "target_symbols": 150,
+        "enabled": True,
+        "min_symbols": 250,
+        "target_symbols": 500,
         "min_market_cap": 200_000_000_000,
         "currency": "KRW",
         "paper_cash": 100_000_000,
@@ -90,8 +101,8 @@ MARKET_DEFAULTS: list[dict[str, Any]] = [
     {
         "code": "GB",
         "name": "영국",
-        "enabled": False,
-        "min_symbols": 100,
+        "enabled": True,
+        "min_symbols": 50,
         "target_symbols": 100,
         "min_market_cap": 200_000_000,
         "currency": "GBP",
@@ -123,6 +134,8 @@ def default_settings() -> dict[str, Any]:
         "include_etp": False,
         "etp_limit": 0,
         "fee_bps": 10.0,
+        "dividend_exit": True,
+        "dividend_cut_ratio": 0.2,
         "model_weight": 0.5,
         "strategy": "learned_tilt",
         "weight_cap": 4.0,
@@ -150,7 +163,7 @@ def _as_float(value: Any, fallback: float, lo: float, hi: float) -> float:
 def normalize_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
     base = default_settings()
     raw = raw or {}
-    factor = _as_float(raw.get("expansion_factor", base["expansion_factor"]), 5, 1, EXPANSION_MAX)
+    factor = _as_float(raw.get("expansion_factor", base["expansion_factor"]), 5, EXPANSION_MIN, EXPANSION_MAX)
     out = {
         "years": _as_int(raw.get("years", 10), 10, 1, 10),
         "expansion_factor": factor,
@@ -162,6 +175,8 @@ def normalize_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
         "include_etp": bool(raw.get("include_etp", False)),
         "etp_limit": _as_int(raw.get("etp_limit", 0), 0, 0, 500),
         "fee_bps": _as_float(raw.get("fee_bps", 10), 10, 0, 200),
+        "dividend_exit": bool(raw.get("dividend_exit", True)),
+        "dividend_cut_ratio": _as_float(raw.get("dividend_cut_ratio", 0.2), 0.2, 0, 1),
         "model_weight": _as_float(raw.get("model_weight", 0.5), 0.5, 0, 1),
         "strategy": raw.get("strategy") if raw.get("strategy") in STRATEGIES else "learned_tilt",
         "weight_cap": _as_float(raw.get("weight_cap", 4), 4, 1, 8),
@@ -175,8 +190,8 @@ def normalize_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
     for preset in MARKET_DEFAULTS:
         src = incoming.get(preset["code"], {})
         minimum = _as_int(src.get("min_symbols", preset["min_symbols"]), preset["min_symbols"], 1, 20000)
-        ceiling = int(minimum * factor)
-        target = _as_int(src.get("target_symbols", minimum), minimum, minimum, ceiling)
+        ceiling = max(minimum * 2, int(minimum * factor))
+        target = _as_int(src.get("target_symbols", minimum * 2), minimum * 2, minimum * 2, ceiling)
         out["markets"].append(
             {
                 "code": preset["code"],

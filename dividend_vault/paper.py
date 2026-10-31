@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import math
 import sqlite3
 from typing import Any
 
+from dividend_vault.costs import buy_quantity, charge, lot_size, schedule, sell_quantity
 from dividend_vault.db import utc_now
+from dividend_vault.dividend_exit import review_positions
 from dividend_vault.settings import market_by_code
 from dividend_vault.strategy import latest_book
 
@@ -74,7 +77,6 @@ def rebalance_market(conn: sqlite3.Connection, market_code: str, settings: dict[
     holdings = book["holdings"]
     if not holdings:
         raise RuntimeError("산출된 보유 종목이 없습니다.")
-    fee_rate = float(settings["fee_bps"]) / 10000.0
     positions = _positions(conn, account["id"])
     prices: dict[str, float] = {}
     asof = book["asof"]
@@ -89,39 +91,49 @@ def rebalance_market(conn: sqlite3.Connection, market_code: str, settings: dict[
     targets = {item["symbol"]: equity * float(item["weight"]) for item in holdings if item["symbol"] in prices}
     orders = []
 
-    def trade(symbol: str, side: str, qty: float, price: float, reason: str) -> None:
+    def trade(symbol: str, side: str, qty: float, price: float, reason: str, odd_lot: bool = False) -> None:
         nonlocal cash
         if qty <= 0 or price <= 0:
             return
-        notional = qty * price
-        fee = notional * fee_rate
         if side == "sell":
             held = positions.get(symbol, {"qty": 0, "avg_price": price})
             qty = min(qty, held["qty"])
-            if qty <= 1e-8:
+            shares, odd = sell_quantity(market_code, qty)
+            if odd_lot:
+                odd = True
+            if shares <= 0:
                 return
-            notional = qty * price
-            fee = notional * fee_rate
+            notional = shares * price
+            fee = charge(market_code, "sell", notional, odd)
+            if (price - held["avg_price"]) * shares - fee <= 0:
+                return
             cash += notional - fee
-            left = held["qty"] - qty
+            left = held["qty"] - shares
             if left <= 1e-6:
                 positions.pop(symbol, None)
             else:
                 positions[symbol] = {"qty": left, "avg_price": held["avg_price"]}
+            qty = shares
         else:
-            cost = notional + fee
-            if cost > cash:
-                qty = cash / (price * (1 + fee_rate))
-                if qty <= 1e-8:
-                    return
-                notional = qty * price
-                fee = notional * fee_rate
-                cost = notional + fee
-            cash -= cost
+            lot = lot_size(market_code)
+            wanted = (int(qty) // lot) * lot
+            minimum = float(schedule(market_code)["min_buy_notional"])
+            if minimum > 0:
+                floor_shares = int(math.ceil(minimum / price / lot)) * lot
+                wanted = max(wanted, floor_shares)
+            shares = min(buy_quantity(market_code, cash, price), wanted)
+            if shares <= 0:
+                return
+            notional = shares * price
+            fee = charge(market_code, "buy", notional)
+            if notional + fee > cash + 1e-6:
+                return
+            cash -= notional + fee
             held = positions.get(symbol, {"qty": 0, "avg_price": 0})
-            new_qty = held["qty"] + qty
-            avg = (held["qty"] * held["avg_price"] + qty * price) / new_qty
+            new_qty = held["qty"] + shares
+            avg = (held["qty"] * held["avg_price"] + shares * price) / new_qty
             positions[symbol] = {"qty": new_qty, "avg_price": avg}
+            qty = shares
         orders.append(
             {
                 "symbol": symbol,
@@ -133,10 +145,29 @@ def rebalance_market(conn: sqlite3.Connection, market_code: str, settings: dict[
             }
         )
 
-    reason = f"{book['strategy']} · 최신 종가 체결 가정 · {asof}"
+    held_notes = []
+    blocked: set[str] = set()
+    cut_ratio = float(settings.get("dividend_cut_ratio", 0.2))
+    if settings.get("dividend_exit", True) and asof:
+        for review in review_positions(conn, market_code, positions, prices, asof, cut_ratio):
+            blocked.add(review["symbol"])
+            if review["sell"]:
+                trade(
+                    review["symbol"],
+                    "sell",
+                    review["shares"],
+                    review["price"],
+                    f"{review['kind']} · 수수료·세금 후 이익 매도 · 손절 아님 · {asof}",
+                    review["odd_lot"],
+                )
+            else:
+                held_notes.append(f"{review['symbol']} {review['kind']}이지만 수수료·세금 후 손실이라 보유")
+    reason = f"{book['strategy']} · 한투 온라인 수수료·세금 · 최신 종가 가정 · {asof}"
     for symbol, position in list(positions.items()):
         price = prices.get(symbol)
         if price is None:
+            continue
+        if symbol in blocked:
             continue
         target_qty = targets.get(symbol, 0) / price
         if position["qty"] > target_qty:
@@ -144,6 +175,8 @@ def rebalance_market(conn: sqlite3.Connection, market_code: str, settings: dict[
     for symbol, target_value in targets.items():
         price = prices[symbol]
         target_qty = target_value / price
+        if symbol in blocked:
+            continue
         held = positions.get(symbol, {"qty": 0})["qty"]
         if target_qty > held:
             trade(symbol, "buy", target_qty - held, price, reason)
@@ -196,7 +229,8 @@ def rebalance_market(conn: sqlite3.Connection, market_code: str, settings: dict[
         "orders": orders,
         "mark": marked,
         "book": {"strategy": book["strategy"], "asof": book["asof"], "holding_count": book["holding_count"]},
-        "disclaimer": "가상 체결은 최신 종가 가정이며 실제 호가와 다릅니다.",
+        "held_despite_cut": held_notes,
+        "disclaimer": "배당이 줄거나 끊겨도 수수료와 세금 후 이익일 때만 매도합니다. 가격 하락만으로 손절하지 않습니다. 가상 체결은 최신 종가 가정입니다.",
     }
 
 

@@ -11,7 +11,7 @@ from urllib.parse import parse_qs, urlparse
 
 from dividend_vault.db import backup_vault, integrity, load_settings, open_vault, save_settings
 from dividend_vault.jobs import JobRunner, maybe_auto_sync, run_sync
-from dividend_vault.kis import add_account, delete_account, ping, place_order, public_accounts
+from dividend_vault.kis import add_account, delete_account, ping, place_order, public_accounts, select_account, selection_view
 from dividend_vault.paper import account_view, rebalance_market
 from dividend_vault.paths import WEB_PATH
 from dividend_vault.report import market_status, symbol_page, totals
@@ -114,6 +114,7 @@ class AppHandler(BaseHTTPRequestHandler):
                         "totals": totals(conn),
                         "integrity": integrity(conn),
                         "kis": public_accounts(),
+                        "kis_selected": selection_view(),
                         "job": RUNNER.snapshot(),
                     },
                 )
@@ -247,7 +248,10 @@ class AppHandler(BaseHTTPRequestHandler):
             self._send(200, {"started": True})
             return
         if path == "/api/kis/accounts":
-            self._send(200, {"account": add_account(data), "accounts": public_accounts()})
+            self._send(200, {"account": add_account(data), "accounts": public_accounts(), "selected": selection_view()})
+            return
+        if path == "/api/kis/select":
+            self._send(200, {"selected": select_account(str(data.get("account_id")), str(data.get("market"))), "accounts": public_accounts()})
             return
         if path == "/api/kis/ping":
             self._send(200, ping(str(data.get("account_id"))))

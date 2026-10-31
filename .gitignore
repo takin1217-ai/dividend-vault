@@ -5,7 +5,7 @@ venv/
 .pytest_cache/
 .mypy_cache/
 
-data/
+/data/
 secrets/
 *.sqlite
 *.sqlite-wal
@@ -21,6 +21,8 @@ android/local.properties
 android/app/src/main/assets/schema.sql
 *.jks
 *.keystore
+*.apk
+*.aab
 
 .idea/
 .vscode/
