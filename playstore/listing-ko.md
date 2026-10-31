@@ -7,7 +7,8 @@
 - 광고: 없음
 - 인앱 결제: 없음
 - 대상: 18세 이상. 어린이용이 아닙니다.
-- 개인정보 처리방침 URL: GitHub Pages `docs/privacy.html`
+- 개인정보 처리방침 URL: https://takin1217-ai.github.io/dividend-vault/privacy.html
+- 원본 파일: `docs/privacy.html` (Pages, `main` / `/docs`)
 - 아이콘: `playstore/icon-512.png`
 - 기능 그래픽: `playstore/feature-1024x500.png`
 
@@ -36,4 +37,4 @@
 3. Android Studio에서 `android/`를 열고 Build > Generate Signed Bundle / APK > Android App Bundle.
 4. 플레이 콘솔의 내부 테스트에 AAB를 올립니다. 금융 앱 선언과 개인정보 처리방침 URL을 함께 제출합니다.
 
-디버그 APK는 저장소 Actions의 `dividend-vault-debug` 아티팩트입니다. 플레이 프로덕션에는 서명된 AAB만 올릴 수 있습니다.
+디버그 APK용 Actions 정의는 `scripts/github-ci.yml`에 있습니다. `workflow` 권한이 있는 로그인으로 `.github/workflows/ci.yml`에 두면 `dividend-vault-debug` 아티팩트가 생깁니다. 플레이 프로덕션에는 서명된 AAB만 올릴 수 있습니다.

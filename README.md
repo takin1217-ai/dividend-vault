@@ -1,6 +1,6 @@
 # 배당금고
 
-미국·중국·홍콩·일본·베트남 고배당 일봉을 먼저 모으고, 한국과 영국을 같은 금고에서 켜서 학습·과거 모의·가상 모의·한국투자증권 주문까지 잇는 연구 도구입니다. 안드로이드 앱 소스는 `android/`에 있고, 구글 플레이에 올릴 때 필요한 문구와 개인정보 처리방침은 `playstore/`와 `docs/`에 있습니다.
+미국·중국·홍콩·일본·베트남 고배당 일봉을 먼저 모으고, 한국과 영국을 같은 금고에서 켜서 학습·과거 모의·가상 모의·한국투자증권 주문까지 잇는 연구 도구입니다. 저장소는 [takin1217-ai/dividend-vault](https://github.com/takin1217-ai/dividend-vault)입니다. 안드로이드 앱 소스는 `android/`에 있고, 구글 플레이에 올릴 때 필요한 문구와 개인정보 처리방침은 `playstore/`와 `docs/`에 있습니다.
 
 수익을 보장하지 않습니다. 과거 성과는 미래 수익이 아닙니다.
 
@@ -43,7 +43,7 @@ powershell -ExecutionPolicy Bypass -File scripts\install_daily_task.ps1
 
 `android/`는 `com.takin1217.dividendvault`, targetSdk 35입니다. 폰에서는 가져온 금고의 일봉을 매일 이어 받고, 배당 기울기 과거 모의와 가상 비중, 확인 문구가 있는 한국투자증권 주문을 실행합니다. 대량 10년 수집과 학습 기울기 릿지 회귀의 기준 구현은 이 연구 단말입니다.
 
-서명 없는 디버그 APK는 GitHub Actions `android` 잡의 아티팩트입니다. 플레이에 올릴 AAB는 본인 키스토어로 서명해야 합니다. 절차는 `playstore/listing-ko.md`에 있습니다.
+서명 없는 디버그 APK를 Actions에서 만들려면 `scripts/github-ci.yml`을 `.github/workflows/ci.yml`로 옮깁니다. 이 계정 토큰에는 `workflow` 범위가 없어 그 경로로는 올리지 못했습니다. 플레이에 올릴 AAB는 본인 키스토어로 서명해야 합니다. 절차는 `playstore/listing-ko.md`에 있습니다.
 
 ```powershell
 keytool -genkeypair -v -keystore dividend-vault.jks -alias dividend -keyalg RSA -keysize 2048 -validity 10000
