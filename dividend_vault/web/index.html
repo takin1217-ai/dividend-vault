@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>배당금고</title>
+<style>
+  :root {
+    --bg: #101613;
+    --panel: #18211c;
+    --line: #314038;
+    --text: #e7f0ea;
+    --muted: #9aafa3;
+    --brass: #e0b56a;
+    --brass-ink: #241b0d;
+    --up: #8dcea8;
+    --down: #e2a090;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 "Segoe UI", "Malgun Gothic", sans-serif;
+  }
+  header, main { width: min(1180px, calc(100% - 32px)); margin: 0 auto; }
+  header { display: flex; justify-content: space-between; gap: 16px; align-items: end; padding: 28px 0 12px; }
+  h1 { font-family: Palatino, "Palatino Linotype", Batang, serif; font-weight: 500; font-size: 40px; margin: 0; letter-spacing: -0.04em; }
+  h2 { font-size: 18px; font-weight: 600; margin: 0 0 12px; }
+  .muted { color: var(--muted); }
+  .banner, .panel { background: var(--panel); border: 1px solid var(--line); }
+  .banner { padding: 12px 14px; margin: 8px 0 18px; color: var(--muted); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
+  .card { padding: 12px 14px; background: var(--panel); border: 1px solid var(--line); }
+  .card b { display: block; font-size: 16px; }
+  .num { font-variant-numeric: tabular-nums; color: var(--brass); }
+  .layout { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 12px; margin: 12px 0; }
+  .panel { padding: 14px; }
+  label { display: block; margin: 8px 0; color: var(--muted); font-size: 13px; }
+  input, select, button { font: inherit; color: var(--text); background: #101613; border: 1px solid var(--line); padding: 7px 8px; }
+  button { background: var(--brass); color: var(--brass-ink); border: 0; cursor: pointer; font-weight: 650; }
+  button.quiet { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  button:disabled { opacity: 0.45; cursor: default; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { border-bottom: 1px solid var(--line); padding: 6px 4px; text-align: left; font-variant-numeric: tabular-nums; }
+  th { color: var(--muted); font-weight: 600; }
+  pre { white-space: pre-wrap; color: var(--muted); font: 12px/1.45 ui-monospace, Consolas, monospace; max-height: 220px; overflow: auto; }
+  svg { width: 100%; height: auto; background: #101613; }
+  .market-edit { display: grid; grid-template-columns: 72px 70px 90px 90px; gap: 6px; align-items: center; margin-bottom: 6px; }
+  @media (max-width: 860px) { .layout, .market-edit { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>배당금고</h1>
+    <div class="muted">7개국 고배당 일봉 · 학습 · 과거 모의 · 가상 모의 · 한국투자증권</div>
+  </div>
+  <div class="muted" id="clock"></div>
+</header>
+<main>
+  <div class="banner">수익을 보장하지 않습니다. 과거 모의는 수정주가 기준의 연구 결과이고, 가상 체결은 최신 종가 가정입니다. 실전 주문은 확인 문구를 입력할 때만 한국투자증권으로 나갑니다. 시세는 이용자 기기에만 저장하며 다시 배포하지 마세요.</div>
+  <section class="grid" id="markets"></section>
+  <section class="layout">
+    <div class="panel">
+      <h2>보유 조건</h2>
+      <p class="muted">최소 보유와 목표 보유를 바꿉니다. 목표는 최소의 1배에서 5배 사이로만 저장됩니다. ETP는 주식 수에 포함하지 않고 따로 붙입니다.</p>
+      <div id="market-form"></div>
+      <div class="row">
+        <label>최소 배당 %<input id="minYield" type="number" step="0.1"></label>
+        <label>최대 배당 %<input id="maxYield" type="number" step="0.1"></label>
+        <label>최소 거래량<input id="minVolume" type="number" step="1000"></label>
+        <label>수수료 bps<input id="fee" type="number" step="1"></label>
+        <label>학습 비중<input id="modelWeight" type="number" step="0.05" min="0" max="1"></label>
+        <label>확장 한도<input id="expansion" type="number" step="1" min="1" max="5"></label>
+      </div>
+      <div class="row">
+        <label><input id="etp" type="checkbox"> ETP 포함</label>
+        <label>ETP 수<input id="etpLimit" type="number" min="0" max="500"></label>
+        <label><input id="preferred" type="checkbox"> 우선주 제외</label>
+        <label><input id="leveraged" type="checkbox"> 레버리지 ETP 제외</label>
+        <label><input id="autoDaily" type="checkbox"> 연구 화면을 켜 두면 07:20, 17:10에 갱신</label>
+      </div>
+      <div class="row">
+        <button id="save" type="button">조건 저장</button>
+        <button id="preset" class="quiet" type="button">목표를 5배로</button>
+        <button id="sync" type="button">5개국 우선 일봉 받기</button>
+        <button id="syncAll" class="quiet" type="button">켠 시장 모두 받기</button>
+        <label><input id="force" type="checkbox"> 오늘 받은 종목도 다시</label>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>작업</h2>
+      <div id="job">대기</div>
+      <pre id="log"></pre>
+      <button id="backup" class="quiet" type="button">오늘 백업</button>
+      <p class="muted" id="integrity"></p>
+    </div>
+  </section>
+  <section class="panel">
+    <h2>선택 종목</h2>
+    <div class="row">
+      <select id="symbolMarket"></select>
+      <input id="query" placeholder="코드 또는 이름">
+      <button id="search" class="quiet" type="button">보기</button>
+    </div>
+    <table><thead><tr><th>코드</th><th>이름</th><th>구분</th><th>배당</th><th>일봉</th><th>시작</th><th>끝</th><th>상태</th></tr></thead><tbody id="symbols"></tbody></table>
+  </section>
+  <section class="layout">
+    <div class="panel">
+      <h2>과거 모의투자</h2>
+      <p class="muted">학습 기울기는 리밸런스 시점 이전 데이터로만 릿지 회귀를 맞춥니다. 같은 조건의 동일비중을 옆에 둡니다. 보유 종목은 조건을 통과한 이름을 모두 포함하고, 점수에 따라 기울입니다.</p>
+      <div class="row">
+        <select id="btMarket"></select>
+        <select id="btStrategy">
+          <option value="learned_tilt">학습 기울기</option>
+          <option value="yield_tilt">배당 기울기</option>
+          <option value="momentum_tilt">모멘텀 기울기</option>
+          <option value="lowvol_tilt">저변동 기울기</option>
+          <option value="equal">동일비중</option>
+        </select>
+        <button id="runBacktest" type="button">과거 모의 실행</button>
+      </div>
+      <div id="chart"></div>
+      <div id="metrics"></div>
+    </div>
+    <div class="panel">
+      <h2>가상 모의투자</h2>
+      <div class="row">
+        <select id="paperMarket"></select>
+        <select id="paperStrategy">
+          <option value="learned_tilt">학습 기울기</option>
+          <option value="yield_tilt">배당 기울기</option>
+          <option value="equal">동일비중</option>
+        </select>
+        <button id="rebalance" type="button">종가로 리밸런스</button>
+      </div>
+      <div id="paper"></div>
+    </div>
+  </section>
+  <section class="panel">
+    <h2>한국투자증권</h2>
+    <p class="muted">모의 키와 실전 키는 다릅니다. 키는 이 컴퓨터의 secrets 폴더에만 저장됩니다. 영국 주식은 주문 거래소 코드가 없어 데이터와 가상 모의만 됩니다.</p>
+    <div class="row">
+      <label>별칭<input id="kisAlias"></label>
+      <label>구분<select id="kisMode"><option value="paper">모의</option><option value="live">실전</option></select></label>
+      <label>앱키<input id="kisKey"></label>
+      <label>앱시크릿<input id="kisSecret" type="password"></label>
+      <label>계좌 8자리<input id="kisAccount"></label>
+      <label>상품코드<input id="kisProduct" value="01"></label>
+      <button id="kisAdd" type="button">계좌 추가</button>
+    </div>
+    <div id="kisList"></div>
+    <div class="row">
+      <label>계좌<select id="kisPick"></select></label>
+      <label>시장<select id="kisMarket"></select></label>
+      <label>종목<input id="kisSymbol" placeholder="AAPL 또는 005930.KS"></label>
+      <label>매매<select id="kisSide"><option value="buy">매수</option><option value="sell">매도</option></select></label>
+      <label>수량<input id="kisQty" type="number" min="1" step="1"></label>
+      <label>지정가<input id="kisPrice" type="number" step="0.01"></label>
+      <label>확인 문구<input id="kisConfirm" placeholder="모의주문확인 또는 실전주문확인"></label>
+      <button id="kisPing" class="quiet" type="button">토큰 시험</button>
+      <button id="kisOrder" type="button">주문 전송</button>
+    </div>
+    <pre id="kisOut"></pre>
+  </section>
+</main>
+<script>
+const state = { settings: null, jobRunning: false };
+const $ = (id) => document.getElementById(id);
+
+async function api(path, options) {
+  const response = await fetch(path, options);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "요청 실패");
+  return data;
+}
+function post(path, body) {
+  return api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+}
+function pct(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "—";
+  return (Number(value) * 100).toFixed(2) + "%";
+}
+function num(value) {
+  if (value === null || value === undefined) return "—";
+  return new Intl.NumberFormat("ko-KR").format(value);
+}
+function marketOptions(select) {
+  select.innerHTML = state.settings.markets.map((market) => `<option value="${market.code}">${market.name}</option>`).join("");
+}
+
+function render(data) {
+  state.settings = data.settings;
+  state.jobRunning = Boolean(data.job && data.job.running);
+  $("clock").textContent = data.totals ? `일봉 ${num(data.totals.bars)} · 배당 ${num(data.totals.dividends)} · 개정 ${num(data.totals.revisions)}` : "";
+  $("markets").innerHTML = data.markets.map((market) => `
+    <article class="card">
+      <b>${market.name} ${market.enabled ? "" : "· 꺼짐"}</b>
+      <div>선택 <span class="num">${num(market.selected)}</span> / 목표 ${num(market.target_symbols)}</div>
+      <div>최소 ${num(market.min_symbols)} · 상한 ${num(market.max_symbols)}</div>
+      <div>일봉 종목 <span class="num">${num(market.with_bars)}</span> · ${num(market.bars)}봉</div>
+      <div>평균 ${Number(market.avg_years || 0).toFixed(1)}년 · 9년 이상 ${num(market.decade)}</div>
+      <div class="${market.failed ? "down" : "muted"}">실패 ${num(market.failed)} · ${market.last_success ? market.last_success.slice(0, 16) : "아직 없음"}</div>
+    </article>`).join("");
+  $("market-form").innerHTML = data.settings.markets.map((market) => `
+    <div class="market-edit">
+      <label><input type="checkbox" data-code="${market.code}" data-field="enabled" ${market.enabled ? "checked" : ""}> ${market.name}</label>
+      <label>최소<input data-code="${market.code}" data-field="min_symbols" type="number" min="1" value="${market.min_symbols}"></label>
+      <label>목표<input data-code="${market.code}" data-field="target_symbols" type="number" min="1" value="${market.target_symbols}"></label>
+      <label>가상현금<input data-code="${market.code}" data-field="paper_cash" type="number" min="0" value="${market.paper_cash}"></label>
+    </div>`).join("");
+  $("minYield").value = (data.settings.min_yield * 100).toFixed(2);
+  $("maxYield").value = (data.settings.max_yield * 100).toFixed(2);
+  $("minVolume").value = data.settings.min_avg_volume;
+  $("fee").value = data.settings.fee_bps;
+  $("modelWeight").value = data.settings.model_weight;
+  $("expansion").value = data.settings.expansion_factor;
+  $("etp").checked = data.settings.include_etp;
+  $("etpLimit").value = data.settings.etp_limit;
+  $("preferred").checked = data.settings.exclude_preferred;
+  $("leveraged").checked = data.settings.exclude_leveraged;
+  $("autoDaily").checked = data.settings.auto_daily;
+  ["symbolMarket", "btMarket", "paperMarket", "kisMarket"].forEach((id) => marketOptions($(id)));
+  const job = data.job || {};
+  $("job").textContent = `${job.kind || "대기"} · ${job.message || ""} ${job.total ? `(${job.done}/${job.total})` : ""}`;
+  $("log").textContent = (job.log || []).join("\n");
+  const integrity = data.integrity || {};
+  $("integrity").textContent = `깨진 봉 ${integrity.broken_bars} · 가격 개정 ${integrity.bar_revisions} · 배당 개정 ${integrity.dividend_revisions} · 백업 ${integrity.backup_count}개. ${integrity.note || ""}`;
+  document.querySelectorAll("button").forEach((button) => { button.disabled = state.jobRunning && button.id !== "search"; });
+  renderKis(data.kis || []);
+}
+
+function collect() {
+  const settings = structuredClone(state.settings);
+  settings.min_yield = Number($("minYield").value) / 100;
+  settings.max_yield = Number($("maxYield").value) / 100;
+  settings.min_avg_volume = Number($("minVolume").value);
+  settings.fee_bps = Number($("fee").value);
+  settings.model_weight = Number($("modelWeight").value);
+  settings.expansion_factor = Number($("expansion").value);
+  settings.include_etp = $("etp").checked;
+  settings.etp_limit = Number($("etpLimit").value);
+  settings.exclude_preferred = $("preferred").checked;
+  settings.exclude_leveraged = $("leveraged").checked;
+  settings.auto_daily = $("autoDaily").checked;
+  for (const market of settings.markets) {
+    const enabled = document.querySelector(`[data-code="${market.code}"][data-field="enabled"]`);
+    const minimum = document.querySelector(`[data-code="${market.code}"][data-field="min_symbols"]`);
+    const target = document.querySelector(`[data-code="${market.code}"][data-field="target_symbols"]`);
+    const cash = document.querySelector(`[data-code="${market.code}"][data-field="paper_cash"]`);
+    market.enabled = enabled.checked;
+    market.min_symbols = Number(minimum.value);
+    market.target_symbols = Number(target.value);
+    market.paper_cash = Number(cash.value);
+  }
+  return settings;
+}
+
+function renderKis(accounts) {
+  $("kisList").innerHTML = accounts.map((account) => `<div>${account.alias} · ${account.mode === "live" ? "실전" : "모의"} · ${account.account_masked} <button class="quiet" data-kis-ping="${account.id}" type="button">토큰</button> <button class="quiet" data-kis-del="${account.id}" type="button">삭제</button></div>`).join("") || `<span class="muted">등록된 계좌가 없습니다.</span>`;
+  $("kisPick").innerHTML = accounts.map((account) => `<option value="${account.id}">${account.alias}</option>`).join("");
+}
+
+function chart(points, color) {
+  if (!points || points.length < 2) return "";
+  const width = 720, height = 220, pad = 18;
+  const values = points.map((point) => point.equity);
+  const low = Math.min(...values), high = Math.max(...values), span = high - low || 1;
+  const coords = points.map((point, index) => {
+    const x = pad + (index / (points.length - 1)) * (width - pad * 2);
+    const y = height - pad - ((point.equity - low) / span) * (height - pad * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  return `<svg viewBox="0 0 ${width} ${height}"><polyline fill="none" stroke="${color}" stroke-width="2" points="${coords}"/></svg>`;
+}
+function metricList(metrics, title) {
+  if (!metrics) return "";
+  return `<h3>${title}</h3><div>기간 ${metrics.start} ~ ${metrics.end}</div><div>CAGR ${pct(metrics.cagr)} · 총수익 ${pct(metrics.total_return)} · MDD ${pct(metrics.mdd)}</div><div>변동성 ${pct(metrics.volatility)} · 샤프 ${metrics.sharpe === null ? "—" : Number(metrics.sharpe).toFixed(2)}</div><div>평균 보유 ${Number(metrics.avg_holdings).toFixed(1)} · 평균 회전 ${pct(metrics.avg_turnover)} · 학습표본 ${num(metrics.train_rows)}</div><div class="muted">${metrics.note || ""}</div>`;
+}
+
+async function refresh() {
+  try { render(await api("/api/status")); }
+  catch (error) { $("job").textContent = error.message; }
+}
+async function loadSymbols() {
+  const data = await api(`/api/symbols?market=${$("symbolMarket").value}&q=${encodeURIComponent($("query").value)}&limit=40`);
+  $("symbols").innerHTML = data.rows.map((row) => `<tr><td>${row.symbol}</td><td>${row.name || ""}</td><td>${row.instrument}</td><td>${pct(row.yield_frac)}</td><td>${num(row.bar_count || 0)}</td><td>${row.first_date || ""}</td><td>${row.last_date || ""}</td><td>${row.status || ""}</td></tr>`).join("");
+}
+async function showBacktest(id) {
+  const data = await api(`/api/backtests/${id}`);
+  const equity = data.equity || {};
+  $("chart").innerHTML = chart(equity.strategy, "#e0b56a") + chart(equity.baseline, "#7f9c8d");
+  $("metrics").innerHTML = metricList(data.metrics, "선택 전략") + metricList(data.baseline, "동일비중");
+}
+async function showPaper() {
+  const data = await api(`/api/paper?market=${$("paperMarket").value}`);
+  const mark = data.mark || {};
+  const rows = (mark.positions || []).slice(0, 12).map((row) => `<tr><td>${row.symbol}</td><td>${Number(row.qty).toFixed(4)}</td><td>${num(Math.round(row.price))}</td><td>${num(Math.round(row.value))}</td></tr>`).join("");
+  $("paper").innerHTML = `<div>평가 ${num(Math.round(mark.equity || 0))} ${data.account.currency} · 현금 ${num(Math.round(mark.cash || 0))}</div><table><tbody>${rows}</tbody></table><p class="muted">가상 체결은 최신 종가 가정입니다.</p>`;
+}
+
+$("save").onclick = async () => { await post("/api/settings", collect()); await refresh(); };
+$("preset").onclick = () => {
+  document.querySelectorAll("[data-field='target_symbols']").forEach((input) => {
+    const code = input.dataset.code;
+    const market = state.settings.markets.find((item) => item.code === code);
+    input.value = Math.round(market.min_symbols * Number($("expansion").value || 5));
+  });
+};
+$("sync").onclick = async () => { await post("/api/settings", collect()); await post("/api/jobs/sync", { markets: ["US", "CN", "HK", "JP", "VN"], force: $("force").checked }); refresh(); };
+$("syncAll").onclick = async () => { await post("/api/settings", collect()); await post("/api/jobs/sync", { force: $("force").checked }); refresh(); };
+$("backup").onclick = async () => { await post("/api/jobs/backup", {}); refresh(); };
+$("search").onclick = () => loadSymbols().catch((error) => alert(error.message));
+$("runBacktest").onclick = async () => {
+  await post("/api/backtest", { market: $("btMarket").value, strategy: $("btStrategy").value });
+  const wait = setInterval(async () => {
+    const job = await api("/api/jobs");
+    if (!job.running) {
+      clearInterval(wait);
+      if (job.result && job.result.id) showBacktest(job.result.id);
+      else if (job.error) $("metrics").textContent = job.error;
+      refresh();
+    }
+  }, 1500);
+};
+$("rebalance").onclick = async () => {
+  await post("/api/paper/rebalance", { market: $("paperMarket").value, strategy: $("paperStrategy").value });
+  const wait = setInterval(async () => {
+    const job = await api("/api/jobs");
+    if (!job.running) { clearInterval(wait); showPaper().catch(() => {}); refresh(); }
+  }, 1500);
+};
+$("kisAdd").onclick = async () => {
+  await post("/api/kis/accounts", {
+    alias: $("kisAlias").value, mode: $("kisMode").value, app_key: $("kisKey").value,
+    app_secret: $("kisSecret").value, account_no: $("kisAccount").value, product_code: $("kisProduct").value
+  });
+  $("kisSecret").value = "";
+  refresh();
+};
+$("kisPing").onclick = async () => { $("kisOut").textContent = JSON.stringify(await post("/api/kis/ping", { account_id: $("kisPick").value }), null, 2); };
+$("kisOrder").onclick = async () => {
+  const data = await post("/api/kis/order", {
+    account_id: $("kisPick").value, market: $("kisMarket").value, symbol: $("kisSymbol").value,
+    side: $("kisSide").value, qty: Number($("kisQty").value), price: Number($("kisPrice").value), confirm: $("kisConfirm").value
+  });
+  $("kisOut").textContent = JSON.stringify(data, null, 2);
+};
+document.body.addEventListener("click", async (event) => {
+  const ping = event.target.dataset.kisPing;
+  const remove = event.target.dataset.kisDel;
+  if (ping) $("kisOut").textContent = JSON.stringify(await post("/api/kis/ping", { account_id: ping }), null, 2);
+  if (remove) { await fetch(`/api/kis/accounts/${remove}`, { method: "DELETE" }); refresh(); }
+});
+refresh().then(loadSymbols);
+setInterval(refresh, 4000);
+</script>
+</body>
+</html>

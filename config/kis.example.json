@@ -1,0 +1,12 @@
+{
+  "accounts": [
+    {
+      "alias": "모의",
+      "mode": "paper",
+      "app_key": "모의투자 앱키",
+      "app_secret": "모의투자 시크릿",
+      "account_no": "12345678",
+      "product_code": "01"
+    }
+  ]
+}
