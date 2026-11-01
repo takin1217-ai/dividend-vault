@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import sqlite3
 from bisect import bisect_right
@@ -527,6 +528,26 @@ def _metrics(
         "train_rows": train_rows,
         "note": "",
     }
+
+
+def store_backtest(conn: sqlite3.Connection, result: dict[str, Any]) -> int:
+    cursor = conn.execute(
+        """
+        INSERT INTO backtests(created_at, market, strategy, params_json, metrics_json, baseline_json, equity_json, holdings_json)
+        VALUES(datetime('now'),?,?,?,?,?,?,?)
+        """,
+        (
+            result["market"],
+            result["strategy"],
+            "{}",
+            json.dumps(result["metrics"], ensure_ascii=False),
+            json.dumps(result["baseline"], ensure_ascii=False) if result["baseline"] else None,
+            json.dumps({"strategy": result["equity"], "baseline": result["baseline_equity"]}, ensure_ascii=False),
+            json.dumps({"count": result["holding_count"], "top": result["holdings"]}, ensure_ascii=False),
+        ),
+    )
+    conn.commit()
+    return int(cursor.lastrowid)
 
 
 def run_backtest(conn: sqlite3.Connection, market_code: str, settings: dict[str, Any], strategy: str | None = None) -> dict[str, Any]:

@@ -21,14 +21,10 @@ class SyncService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val app = application as VaultApp
         val notifier = VaultNotifier(this)
-        if (app.running.value) {
-            app.phase.value = Phase.Delayed
-            notifier.delayed("일봉 수신 지연", "이미 수신 중입니다.")
-            return START_NOT_STICKY
-        }
+        if (app.running.value) return START_NOT_STICKY
         app.running.value = true
         app.phase.value = Phase.Running
-        val notice = notifier.progress("일봉 수신", "선택한 종목의 일봉을 이어 받는 중")
+        val notice = notifier.progress("일봉 수신", "나라별 최소 보유의 2배 일봉을 받는 중")
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(VaultNotifier.PROGRESS_ID, notice, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         } else {

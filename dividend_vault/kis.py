@@ -186,6 +186,71 @@ def select_account(account_id: str, market: str) -> dict[str, Any]:
     return selection_view()
 
 
+def update_account(payload: dict[str, Any]) -> dict[str, Any]:
+    account_id = str(payload.get("id") or payload.get("account_id") or "")
+    data = _load()
+    row = next((item for item in data["accounts"] if item["id"] == account_id), None)
+    if row is None:
+        raise KisError("계좌를 찾지 못했습니다.")
+    alias = str(payload.get("alias") or "").strip()
+    if alias:
+        row["alias"] = alias
+    mode = payload.get("mode")
+    if mode in ("paper", "live"):
+        row["mode"] = mode
+    app_key = str(payload.get("app_key") or "").strip()
+    app_secret = str(payload.get("app_secret") or "").strip()
+    if app_key and app_key != row.get("app_key") and not app_secret:
+        raise KisError("앱키를 바꾸면 앱시크릿도 입력하세요.")
+    if app_key:
+        row["app_key"] = app_key
+    if app_secret:
+        row["app_secret"] = app_secret
+    account_no = str(payload.get("account_no") or "").strip()
+    if account_no:
+        if len(account_no) < 8:
+            raise KisError("계좌번호 8자리를 입력하세요.")
+        row["account_no"] = account_no[:8]
+    if payload.get("product_code"):
+        row["product_code"] = str(payload.get("product_code") or "01")[:2] or "01"
+    if payload.get("markets") is not None:
+        markets = _clean_markets(payload.get("markets"))
+        if not markets:
+            raise KisError("나라는 최소 1개를 고르세요. 한 계좌에 7개국을 모두 넣을 수 있습니다.")
+        row["markets"] = markets
+        data["selected"] = {
+            code: chosen
+            for code, chosen in (data.get("selected") or {}).items()
+            if chosen != account_id or code in markets
+        }
+    if payload.get("us_exchange"):
+        us_exchange = str(payload.get("us_exchange")).upper()
+        if us_exchange not in {"NASD", "NYSE", "AMEX"}:
+            raise KisError("미국 거래소는 NASD, NYSE, AMEX 중 하나입니다.")
+        row["us_exchange"] = us_exchange
+    if payload.get("vn_exchange"):
+        vn_exchange = str(payload.get("vn_exchange")).upper()
+        if vn_exchange not in {"VNSE", "HASE"}:
+            raise KisError("베트남 거래소는 HOSE(VNSE) 또는 HNX(HASE) 입니다.")
+        row["vn_exchange"] = vn_exchange
+    if payload.get("select"):
+        for code in _markets_of(row):
+            data["selected"][code] = account_id
+    _save(data)
+    return next(item for item in public_accounts() if item["id"] == account_id)
+
+
+def clear_selection(account_id: str, market: str) -> dict[str, Any]:
+    code = str(market or "").upper()
+    if code not in MARKET_CODES:
+        raise KisError("나라는 US CN HK JP VN KR GB 중 하나입니다.")
+    data = _load()
+    if (data.get("selected") or {}).get(code) == account_id:
+        data["selected"].pop(code, None)
+        _save(data)
+    return selection_view()
+
+
 def delete_account(account_id: str) -> None:
     data = _load()
     data["accounts"] = [row for row in data["accounts"] if row["id"] != account_id]

@@ -7,6 +7,7 @@ import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import com.takin1217.dividendvault.Phase
 import com.takin1217.dividendvault.VaultApp
+import com.takin1217.dividendvault.data.KisBroker
 import com.takin1217.dividendvault.notify.VaultNotifier
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -20,11 +21,7 @@ class DailySyncWorker(context: Context, params: WorkerParameters) : CoroutineWor
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val app = applicationContext as VaultApp
         val notifier = VaultNotifier(applicationContext)
-        if (app.running.value) {
-            app.phase.value = Phase.Delayed
-            notifier.delayed("일봉 수신 지연", "다른 수신이 끝나기를 기다립니다.")
-            return@withContext Result.success()
-        }
+        if (app.running.value) return@withContext Result.success()
         app.running.value = true
         app.phase.value = Phase.Running
         try {
@@ -34,6 +31,9 @@ class DailySyncWorker(context: Context, params: WorkerParameters) : CoroutineWor
         }
         try {
             val failed = SyncEngine(applicationContext).syncSelected(force = false)
+            KisBroker.MARKET_CODES.forEach { code ->
+                runCatching { com.takin1217.dividendvault.data.PaperBook.run(app, code) }
+            }
             val backup = backupVault(applicationContext)
             notifier.backup("기기 안에 백업했습니다. ${backup.name}")
             if (failed == 0) {

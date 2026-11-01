@@ -17,11 +17,20 @@ object Research {
         val weights: Map<String, Double>,
     )
 
-    fun yieldTilt(db: SQLiteDatabase, market: String, minYield: Double, maxYield: Double, feeBps: Double): Result {
+    fun yieldTilt(
+        db: SQLiteDatabase,
+        market: String,
+        minYield: Double,
+        maxYield: Double,
+        feeBps: Double,
+        weightCap: Double = 4.0,
+        maxHoldings: Int = 0,
+        rebalanceDays: Int = 21,
+    ): Result {
         val histories = load(db, market)
-        if (histories.size < 2) error("$market 일봉이 부족합니다. 연구 단말에서 내보낸 금고를 가져오세요.")
+        if (histories.size < 2) error("$market 일봉이 부족합니다. 2배 일봉 확보를 먼저 실행하세요.")
         val days = masterDates(histories)
-        val steps = rebalanceIndexes(days.size)
+        val steps = rebalanceIndexes(days.size, rebalanceDays)
         if (steps.size < 2) error("$market 일봉이 아직 짧아 모의투자를 시작할 수 없습니다.")
         val aligned = align(histories, days)
         var equity = 1.0
@@ -39,9 +48,10 @@ object Research {
                     history to yield
                 }
                 if (rows.size >= 2) {
-                    val chosen = pick(rows.map { it.second }, minYield, maxYield, minOf(histories.size, rows.size))
+                    var chosen = pick(rows.map { it.second }, minYield, maxYield, minOf(histories.size, rows.size))
+                    if (maxHoldings > 0) chosen = chosen.sortedByDescending { rows[it].second }.take(maxHoldings)
                     if (chosen.isNotEmpty()) {
-                        val weights = tilt(chosen.map { rows[it].second })
+                        val weights = tilt(chosen.map { rows[it].second }, weightCap)
                         val marked = mark(units, aligned, index, countAnomaly = false) { anomalies += 1 }
                         if (marked > 0) equity = marked
                         val old = linkedMapOf<String, Double>()
@@ -143,9 +153,10 @@ object Research {
         return counts.filterValues { it >= threshold }.keys.sorted()
     }
 
-    private fun rebalanceIndexes(dayCount: Int): List<Int> {
+    private fun rebalanceIndexes(dayCount: Int, step: Int): List<Int> {
         val start = if (dayCount > 400) 252 else max(80, dayCount / 5)
-        return (start until max(start, dayCount - 1) step 21).toList()
+        val stride = step.coerceIn(5, 63)
+        return (start until max(start, dayCount - 1) step stride).toList()
     }
 
     private fun align(histories: List<History>, days: List<String>): Map<String, DoubleArray> {

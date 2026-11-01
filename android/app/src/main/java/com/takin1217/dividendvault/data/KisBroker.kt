@@ -28,6 +28,96 @@ class KisBroker(context: Context) {
     private val jsonType = "application/json; charset=utf-8".toMediaType()
     private val clock = DateTimeFormatter.ofPattern("M월 d일 HH:mm").withZone(ZoneId.systemDefault())
 
+    data class TradePolicy(
+        val minYield: Double,
+        val maxYield: Double,
+        val cutRatio: Double,
+        val weightCap: Double,
+        val maxHoldings: Int,
+        val rebalanceDays: Int,
+        val feeBps: Double,
+        val paperCash: Double,
+    ) {
+        fun line(): String {
+            val cash = if (paperCash > 0) " · 시드 ${paperCash.toLong()}" else ""
+            val book = if (maxHoldings > 0) "${maxHoldings}종목" else "조건 종목"
+            return "배당 ${pct(minYield)}~${pct(maxYield)}% · 축소 ${pct(cutRatio)}% · $book · ${rebalanceDays}일 · 비중 ${trim(weightCap)}배$cash"
+        }
+
+        fun toJson(): JSONObject = JSONObject()
+            .put("min_yield", minYield)
+            .put("max_yield", maxYield)
+            .put("cut_ratio", cutRatio)
+            .put("weight_cap", weightCap)
+            .put("max_holdings", maxHoldings)
+            .put("rebalance_days", rebalanceDays)
+            .put("fee_bps", feeBps)
+            .put("paper_cash", paperCash)
+
+        companion object {
+            fun defaults() = TradePolicy(0.02, 0.12, 0.2, 4.0, 40, 21, 10.0, 0.0)
+
+            fun from(account: JSONObject): TradePolicy {
+                val policy = account.optJSONObject("policy") ?: return defaults()
+                return TradePolicy(
+                    minYield = policy.optDouble("min_yield", 0.02),
+                    maxYield = policy.optDouble("max_yield", 0.12),
+                    cutRatio = policy.optDouble("cut_ratio", 0.2),
+                    weightCap = policy.optDouble("weight_cap", 4.0),
+                    maxHoldings = policy.optInt("max_holdings", 40),
+                    rebalanceDays = policy.optInt("rebalance_days", 21),
+                    feeBps = policy.optDouble("fee_bps", 10.0),
+                    paperCash = policy.optDouble("paper_cash", 0.0),
+                )
+            }
+
+            fun parse(
+                minPct: String,
+                maxPct: String,
+                cutPct: String,
+                cap: String,
+                holdings: String,
+                days: String,
+                fee: String,
+                cash: String,
+            ): TradePolicy {
+                val minYield = percent(minPct, "최소 배당률")
+                val maxYield = percent(maxPct, "최대 배당률")
+                val cutRatio = percent(cutPct, "배당축소 기준")
+                val weightCap = number(cap, "비중 상한")
+                val maxHoldings = holdings.trim().ifBlank { "40" }.toIntOrNull() ?: error("최대 보유 종목은 정수입니다.")
+                val rebalanceDays = days.trim().ifBlank { "21" }.toIntOrNull() ?: error("리밸런스 간격은 정수 일수입니다.")
+                val feeBps = number(fee.ifBlank { "10" }, "모의 수수료")
+                val paperCash = if (cash.isBlank()) 0.0 else number(cash, "가상 시드")
+                if (minYield > maxYield) error("최소 배당률은 최대 배당률보다 클 수 없습니다.")
+                if (minYield !in 0.0..0.25 || maxYield !in 0.0..0.30) error("배당률은 0%에서 30% 사이로 입력하세요.")
+                if (cutRatio !in 0.05..0.9) error("배당축소 기준은 5%에서 90% 사이입니다.")
+                if (weightCap !in 1.0..10.0) error("비중 상한은 1배에서 10배 사이입니다.")
+                if (maxHoldings !in 0..500) error("최대 보유 종목은 0에서 500 사이입니다. 0이면 배당 조건에 맞는 종목을 씁니다.")
+                if (rebalanceDays !in 5..63) error("리밸런스 간격은 5일에서 63일 사이입니다.")
+                if (feeBps !in 0.0..100.0) error("모의 수수료는 0에서 100bp 사이입니다.")
+                if (paperCash < 0) error("가상 시드는 0 이상입니다.")
+                return TradePolicy(minYield, maxYield, cutRatio, weightCap, maxHoldings, rebalanceDays, feeBps, paperCash)
+            }
+
+            private fun percent(text: String, label: String): Double {
+                val value = number(text, label)
+                return value / 100.0
+            }
+
+            private fun number(text: String, label: String): Double {
+                return text.trim().replace(",", "").toDoubleOrNull() ?: error("$label 숫자를 입력하세요.")
+            }
+
+            private fun pct(value: Double): String = trim(value * 100)
+
+            private fun trim(value: Double): String {
+                val whole = value.toLong().toDouble()
+                return if (kotlin.math.abs(value - whole) < 1e-9) whole.toLong().toString() else value.toString()
+            }
+        }
+    }
+
     data class AccountCard(
         val id: String,
         val alias: String,
@@ -39,6 +129,7 @@ class KisBroker(context: Context) {
         val vnExchange: String,
         val selectedMarkets: List<String>,
         val token: String,
+        val policy: String,
     )
 
     fun add(
@@ -52,6 +143,7 @@ class KisBroker(context: Context) {
         usExchange: String,
         vnExchange: String,
         assign: Boolean,
+        policy: TradePolicy,
     ) {
         if (mode != "paper" && mode != "live") error("mode는 paper 또는 live 입니다.")
         val key = appKey.trim()
@@ -84,6 +176,7 @@ class KisBroker(context: Context) {
                 .put("markets", linked)
                 .put("us_exchange", us)
                 .put("vn_exchange", vn)
+                .put("policy", policy.toJson())
                 .put("created_at", Instant.now().toString()),
         )
         val selected = root.optJSONObject("selected") ?: JSONObject()
@@ -94,6 +187,102 @@ class KisBroker(context: Context) {
         root.put("selected", selected)
         write(accountsFile, root)
         legacyAccounts.delete()
+    }
+
+    data class AccountDraft(
+        val id: String,
+        val alias: String,
+        val mode: String,
+        val appKey: String,
+        val accountNo: String,
+        val productCode: String,
+        val markets: Set<String>,
+        val usExchange: String,
+        val vnExchange: String,
+        val policy: TradePolicy,
+    )
+
+    fun draft(id: String): AccountDraft {
+        val row = accountById(id)
+        return AccountDraft(
+            id = row.getString("id"),
+            alias = row.optString("alias"),
+            mode = row.optString("mode", "paper"),
+            appKey = row.optString("app_key"),
+            accountNo = row.optString("account_no"),
+            productCode = row.optString("product_code", "01"),
+            markets = marketsOf(row).toSet(),
+            usExchange = row.optString("us_exchange", "NASD"),
+            vnExchange = row.optString("vn_exchange", "VNSE"),
+            policy = TradePolicy.from(row),
+        )
+    }
+
+    fun policyForMarket(market: String): TradePolicy = TradePolicy.from(accountForMarket(market))
+
+    fun update(
+        id: String,
+        alias: String,
+        mode: String,
+        appKey: String,
+        appSecret: String,
+        accountNo: String,
+        markets: Set<String>,
+        productCode: String,
+        usExchange: String,
+        vnExchange: String,
+        assign: Boolean,
+        policy: TradePolicy,
+    ) {
+        if (mode != "paper" && mode != "live") error("mode는 paper 또는 live 입니다.")
+        val chosen = markets.map { it.uppercase() }.filter { it in MARKET_CODES }.distinct()
+        if (chosen.isEmpty()) error("나라는 최소 1개를 고르세요. 한 계좌에 7개국을 모두 넣을 수 있습니다.")
+        val us = usExchange.uppercase().ifBlank { "NASD" }
+        val vn = vnExchange.uppercase().ifBlank { "VNSE" }
+        if (us !in setOf("NASD", "NYSE", "AMEX")) error("미국 거래소는 NASD, NYSE, AMEX 중 하나입니다.")
+        if (vn !in setOf("VNSE", "HASE")) error("베트남 거래소는 HOSE(VNSE) 또는 HNX(HASE) 입니다.")
+        val root = read(accountsFile, legacyAccounts)
+        val accounts = root.optJSONArray("accounts") ?: JSONArray()
+        val row = (0 until accounts.length()).map { accounts.getJSONObject(it) }.firstOrNull { it.getString("id") == id }
+            ?: error("계좌를 찾지 못했습니다.")
+        val key = appKey.trim()
+        val secret = appSecret.trim()
+        if (key.isNotEmpty() && key != row.optString("app_key") && secret.isEmpty()) error("앱키를 바꾸면 앱시크릿도 입력하세요.")
+        if (alias.isNotBlank()) row.put("alias", alias)
+        row.put("mode", mode)
+        if (key.isNotEmpty()) row.put("app_key", key)
+        if (secret.isNotEmpty()) row.put("app_secret", secret)
+        val number = accountNo.trim()
+        if (number.isNotEmpty()) {
+            if (number.length < 8) error("계좌번호 8자리를 입력하세요.")
+            row.put("account_no", number.take(8))
+        }
+        row.put("product_code", productCode.trim().ifBlank { "01" }.take(2))
+        val linked = JSONArray()
+        chosen.forEach { linked.put(it) }
+        row.put("markets", linked)
+        row.put("us_exchange", us)
+        row.put("vn_exchange", vn)
+        row.put("policy", policy.toJson())
+        val selected = root.optJSONObject("selected") ?: JSONObject()
+        val next = JSONObject()
+        selected.keys().forEach { code ->
+            val chosenId = selected.optString(code)
+            if (chosenId != id || code in chosen) next.put(code, chosenId)
+        }
+        if (assign) chosen.forEach { next.put(it, id) }
+        root.put("accounts", accounts)
+        root.put("selected", next)
+        write(accountsFile, root)
+    }
+
+    fun unselect(id: String, market: String) {
+        val code = market.uppercase()
+        val root = read(accountsFile, legacyAccounts)
+        val selected = root.optJSONObject("selected") ?: JSONObject()
+        if (selected.optString(code) == id) selected.remove(code)
+        root.put("selected", selected)
+        write(accountsFile, root)
     }
 
     fun cards(): List<AccountCard> {
@@ -122,6 +311,7 @@ class KisBroker(context: Context) {
                 vnExchange = account.optString("vn_exchange", "VNSE"),
                 selectedMarkets = chosenByAccount[account.getString("id")].orEmpty(),
                 token = tokenLine(account),
+                policy = TradePolicy.from(account).line(),
             )
         }
     }
@@ -215,7 +405,6 @@ class KisBroker(context: Context) {
         qty: Int,
         price: Double,
         confirm: String,
-        exchange: String,
     ): String {
         val account = accountForMarket(market)
         if (market.uppercase() !in marketsOf(account)) error("이 계좌에는 그 나라가 연결되어 있지 않습니다.")
@@ -223,22 +412,30 @@ class KisBroker(context: Context) {
         val phrase = if (mode == "paper") "모의주문확인" else "실전주문확인"
         if (confirm != phrase) error("${if (mode == "live") "실전" else "모의"} 주문은 확인 문구 '$phrase'가 있어야 전송됩니다.")
         if (side != "buy" && side != "sell") error("side는 buy 또는 sell 입니다.")
-        if (qty < 1) error("한국투자증권 주문 수량은 1주 이상의 정수입니다.")
+        if (side == "sell" && qty < 1) error("매도 수량은 1주 이상의 정수입니다.")
         if (price <= 0) error("지정가 가격이 필요합니다.")
         if (mode == "live") {
             val blocked = TradeRules.liveBlockReason(app.database.readableDatabase)
             if (blocked != null) error(blocked)
         }
+        val policy = TradePolicy.from(account)
+        if (side == "buy") {
+            val yield = TradeRules.trailingYield(app.database.readableDatabase, symbol)
+            if (yield != null && (yield < policy.minYield || yield > policy.maxYield)) {
+                error("이 계좌 배당 조건 ${"%.1f".format(policy.minYield * 100)}~${"%.1f".format(policy.maxYield * 100)}% 밖이라 매수하지 않습니다.")
+            }
+        }
+        val sized = if (side == "buy") {
+            TradeRules.orderShares(market, price, TradeRules.minNotional(app.database.readSettings(), market))
+        } else {
+            qty
+        }
+        if (sized < 1) error("주문 수량이 없습니다.")
         if (side == "sell") {
-            val blocked = TradeRules.lossSellReason(app.database.readableDatabase, account.getString("alias"), market, symbol, qty, price)
+            val blocked = TradeRules.lossSellReason(app.database.readableDatabase, account.getString("alias"), market, symbol, sized, price)
             if (blocked != null) error(blocked)
         }
-        val venue = when (market.uppercase()) {
-            "US" -> exchange.ifBlank { account.optString("us_exchange", "NASD") }
-            "VN" -> exchange.ifBlank { account.optString("vn_exchange", "VNSE") }
-            else -> exchange
-        }
-        val board = board(market, symbol, venue)
+        val board = board(market, symbol, listedExchange(market, symbol))
         val trId = tr(board.group, side, mode)
         val body = if (market == "KR") {
             JSONObject()
@@ -246,7 +443,7 @@ class KisBroker(context: Context) {
                 .put("ACNT_PRDT_CD", account.getString("product_code"))
                 .put("PDNO", board.product)
                 .put("ORD_DVSN", "00")
-                .put("ORD_QTY", qty.toString())
+                .put("ORD_QTY", sized.toString())
                 .put("ORD_UNPR", priceText(market, price))
         } else {
             JSONObject()
@@ -254,7 +451,7 @@ class KisBroker(context: Context) {
                 .put("ACNT_PRDT_CD", account.getString("product_code"))
                 .put("OVRS_EXCG_CD", board.exchange)
                 .put("PDNO", board.product)
-                .put("ORD_QTY", qty.toString())
+                .put("ORD_QTY", sized.toString())
                 .put("OVRS_ORD_UNPR", priceText(market, price))
                 .put("CTAC_TLNO", "")
                 .put("MGCO_APTM_ODNO", "")
@@ -278,14 +475,14 @@ class KisBroker(context: Context) {
                 market,
                 symbol,
                 side,
-                qty.toDouble(),
+                sized.toDouble(),
                 price,
                 "submitted",
                 JSONObject().put("tr_id", trId).put("path", path).toString(),
                 response.toString().take(4000),
             ),
         )
-        val summary = "$trId ${account.getString("alias")} $symbol $side ${qty}주 $message"
+        val summary = "$trId ${account.getString("alias")} $symbol $side ${sized}주 $message"
         VaultNotifier(app).trade(summary)
         return summary
     }
@@ -305,10 +502,37 @@ class KisBroker(context: Context) {
         }
     }
 
+    private fun listedExchange(market: String, symbol: String): String {
+        val stored = app.database.readableDatabase.rawQuery(
+            "SELECT exchange FROM symbols WHERE symbol=?",
+            arrayOf(symbol),
+        ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0).orEmpty() else "" }
+        val label = stored.ifBlank { chartExchange(symbol) }
+        return if (market.uppercase() == "US") usExchange(label) else label
+    }
+
+    private fun chartExchange(symbol: String): String {
+        return runCatching {
+            val encoded = java.net.URLEncoder.encode(symbol, "UTF-8")
+            val request = Request.Builder()
+                .url("https://query1.finance.yahoo.com/v8/finance/chart/$encoded?interval=1d&range=5d")
+                .header("User-Agent", "Mozilla/5.0 DividendVault/1.0")
+                .build()
+            client.newCall(request).execute().use { response ->
+                val text = response.body?.string().orEmpty()
+                if (!response.isSuccessful) return ""
+                val meta = JSONObject(text).getJSONObject("chart").getJSONArray("result").getJSONObject(0).getJSONObject("meta")
+                meta.optString("exchangeName").ifBlank { meta.optString("exchange") }
+            }
+        }.getOrDefault("")
+    }
+
     private fun usExchange(exchange: String): String {
-        return when (exchange.uppercase()) {
-            "NYQ", "NYS", "NYSE" -> "NYSE"
-            "ASE", "AMX", "PCX", "AMS", "AMEX" -> "AMEX"
+        val text = exchange.uppercase()
+        return when {
+            text.contains("NAS") || text in setOf("NMS", "NGM", "NCM") -> "NASD"
+            text.contains("ARCA") || text.contains("AMERICAN") || text in setOf("ASE", "AMX", "PCX", "AMS", "AMEX") -> "AMEX"
+            text.contains("NYSE") || text in setOf("NYQ", "NYS") -> "NYSE"
             else -> "NASD"
         }
     }

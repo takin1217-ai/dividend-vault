@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from datetime import date, timedelta
@@ -6,6 +7,7 @@ from pathlib import Path
 from dividend_vault.costs import buy_quantity, charge
 from dividend_vault.db import open_vault, upsert_bars, upsert_symbol
 from dividend_vault.dividend_exit import review_positions
+import dividend_vault.kis as kis
 from dividend_vault.kis import fresh_token
 from dividend_vault.readiness import loss_sell_reason
 from dividend_vault.settings import normalize_settings
@@ -167,6 +169,31 @@ class CostTests(unittest.TestCase):
         self.assertEqual(fresh_token(slot, now), "once")
         self.assertIsNone(fresh_token(slot, now + 3600))
         self.assertIsNone(fresh_token(None, now))
+
+    def test_account_conditions_can_change_and_delete(self):
+        with tempfile.TemporaryDirectory() as folder:
+            original = kis.ACCOUNTS_PATH
+            kis.ACCOUNTS_PATH = Path(folder) / "kis.json"
+            try:
+                added = kis.add_account({
+                    "alias": "처음",
+                    "mode": "paper",
+                    "app_key": "key",
+                    "app_secret": "secret",
+                    "account_no": "12345678",
+                    "markets": ["US", "KR"],
+                    "select": True,
+                })
+                changed = kis.update_account({"id": added["id"], "alias": "바꿈", "markets": ["JP"], "app_secret": ""})
+                self.assertEqual(changed["alias"], "바꿈")
+                self.assertEqual(changed["markets"], ["JP"])
+                self.assertNotIn("US", changed["selected_markets"])
+                stored = json.loads(kis.ACCOUNTS_PATH.read_text(encoding="utf-8"))
+                self.assertEqual(stored["accounts"][0]["app_secret"], "secret")
+                kis.delete_account(added["id"])
+                self.assertEqual(kis.public_accounts(), [])
+            finally:
+                kis.ACCOUNTS_PATH = original
 
 
 if __name__ == "__main__":

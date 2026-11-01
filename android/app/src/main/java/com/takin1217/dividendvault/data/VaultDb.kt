@@ -22,12 +22,14 @@ class VaultDb(private val context: Context) : SQLiteOpenHelper(context, "vault.d
         db.execSQL("PRAGMA foreign_keys=ON")
         seedSettings(db)
         applyHoldingFloors(db)
+        ensureOrderNotionals(db)
     }
 
     fun readSettings(): JSONObject {
         val db = writableDatabase
         seedSettings(db)
         applyHoldingFloors(db)
+        ensureOrderNotionals(db)
         return db.rawQuery("SELECT value FROM meta WHERE key='settings'", null).use { cursor ->
             cursor.moveToFirst()
             JSONObject(cursor.getString(0))
@@ -76,6 +78,43 @@ class VaultDb(private val context: Context) : SQLiteOpenHelper(context, "vault.d
             "INSERT INTO meta(key, value) VALUES('holding_floor', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             arrayOf("20261031-2x"),
         )
+    }
+
+    private fun ensureOrderNotionals(db: SQLiteDatabase) {
+        val raw = db.rawQuery("SELECT value FROM meta WHERE key='settings'", null).use { cursor ->
+            if (!cursor.moveToFirst()) return
+            cursor.getString(0)
+        }
+        val settings = JSONObject(raw)
+        val markets = settings.getJSONArray("markets")
+        var changed = false
+        for (index in 0 until markets.length()) {
+            val row = markets.getJSONObject(index)
+            if (row.has("min_order_notional")) continue
+            row.put("min_order_notional", TradeRules.defaultNotional(row.getString("code")))
+            changed = true
+        }
+        if (changed) db.execSQL("UPDATE meta SET value=? WHERE key='settings'", arrayOf(settings.toString()))
+    }
+
+    fun saveMarketRule(code: String, minSymbols: Int, minNotional: Double) {
+        if (minSymbols < 1) error("최소 보유 종목은 1개 이상입니다.")
+        if (minNotional < 0) error("최소 주문 금액은 0 이상입니다.")
+        val db = writableDatabase
+        val settings = readSettings()
+        val markets = settings.getJSONArray("markets")
+        var found = false
+        for (index in 0 until markets.length()) {
+            val row = markets.getJSONObject(index)
+            if (row.getString("code") != code) continue
+            row.put("min_symbols", minSymbols)
+            row.put("target_symbols", minSymbols * 2)
+            row.put("max_symbols", minSymbols * 5)
+            row.put("min_order_notional", minNotional)
+            found = true
+        }
+        if (!found) error("나라를 찾지 못했습니다.")
+        db.execSQL("UPDATE meta SET value=? WHERE key='settings'", arrayOf(settings.toString()))
     }
 
     companion object {

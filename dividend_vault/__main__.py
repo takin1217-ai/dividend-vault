@@ -1,7 +1,6 @@
 """배당금고 명령.
 
 python -m dividend_vault sync
-python -m dividend_vault serve --open
 """
 
 from __future__ import annotations
@@ -13,9 +12,8 @@ from dividend_vault.db import backup_vault, integrity, load_settings, open_vault
 from dividend_vault.jobs import run_sync
 from dividend_vault.paper import rebalance_market
 from dividend_vault.report import market_status, totals
-from dividend_vault.server import _store_backtest, serve
 from dividend_vault.settings import enabled_markets
-from dividend_vault.strategy import run_backtest_pair
+from dividend_vault.strategy import run_backtest_pair, store_backtest
 
 
 def _print_progress(message: str, done: int, total: int) -> None:
@@ -45,11 +43,6 @@ def main(argv: list[str] | None = None) -> None:
     prepare.add_argument("--markets", default="", help="예: US,KR,GB")
 
     sub.add_parser("backup", help="오늘 백업이 없으면 하나 만듭니다")
-
-    web = sub.add_parser("serve", help="로컬 연구 화면")
-    web.add_argument("--host", default="127.0.0.1")
-    web.add_argument("--port", type=int, default=8765)
-    web.add_argument("--open", action="store_true")
 
     args = parser.parse_args(argv)
     if args.command == "init":
@@ -102,7 +95,7 @@ def main(argv: list[str] | None = None) -> None:
                 code = market["code"]
                 try:
                     result = run_backtest_pair(conn, code, settings, settings["strategy"])
-                    _store_backtest(conn, result)
+                    store_backtest(conn, result)
                     paper = rebalance_market(conn, code, settings, settings["strategy"])
                     print(f"{market['name']} 과거 모의와 가상 모의를 마쳤습니다. 주문 {len(paper.get('orders') or [])}건", flush=True)
                 except Exception as exc:
@@ -118,8 +111,6 @@ def main(argv: list[str] | None = None) -> None:
             conn.close()
         print(path or "백업할 일봉이 아직 없습니다.")
         return
-    if args.command == "serve":
-        serve(args.host, args.port, args.open)
 
 
 if __name__ == "__main__":

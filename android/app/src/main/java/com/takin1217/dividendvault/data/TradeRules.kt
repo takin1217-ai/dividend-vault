@@ -40,6 +40,35 @@ object TradeRules {
         return fee + notional * if (side == "sell") item.sellTax else item.buyTax
     }
 
+    fun orderShares(market: String, price: Double, minNotional: Double): Int {
+        if (price <= 0) return 0
+        val item = schedule(market)
+        val lot = item.lot
+        val floor = maxOf(minNotional, item.minBuyNotional)
+        val oneLot = price * lot
+        return if (floor <= 0 || oneLot + 1e-9 >= floor) lot else (ceil(floor / price / lot).toInt()) * lot
+    }
+
+    fun minNotional(settings: JSONObject, market: String): Double {
+        val markets = settings.optJSONArray("markets") ?: return defaultNotional(market)
+        for (index in 0 until markets.length()) {
+            val row = markets.getJSONObject(index)
+            if (row.optString("code") == market) return row.optDouble("min_order_notional", defaultNotional(market))
+        }
+        return defaultNotional(market)
+    }
+
+    fun defaultNotional(market: String): Double = when (market) {
+        "US" -> 100.0
+        "CN" -> 1_000.0
+        "HK" -> 1_000.0
+        "JP" -> 10_000.0
+        "VN" -> 200_000_000.0
+        "KR" -> 100_000.0
+        "GB" -> 100.0
+        else -> 0.0
+    }
+
     fun buyShares(market: String, cash: Double, price: Double): Int {
         if (cash <= 0 || price <= 0) return 0
         val item = schedule(market)
@@ -242,6 +271,21 @@ object TradeRules {
         return db.rawQuery(sql, arrayOf(market)).use { cursor ->
             if (cursor.moveToFirst()) cursor.getInt(0) else 0
         }
+    }
+
+    fun trailingYield(db: SQLiteDatabase, symbol: String): Double? {
+        val last = db.rawQuery(
+            "SELECT close, date FROM bars WHERE symbol=? AND close>0 ORDER BY date DESC LIMIT 1",
+            arrayOf(symbol),
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) return null
+            cursor.getDouble(0) to cursor.getString(1)
+        }
+        if (last.first <= 0 || last.second.isNullOrBlank()) return null
+        val start = LocalDate.parse(last.second).minusDays(365).toString()
+        val total = dividendSum(db, symbol, start, last.second)
+        if (total <= 0) return null
+        return total / last.first
     }
 
     private fun dividendSum(db: SQLiteDatabase, symbol: String, start: String, end: String): Double {

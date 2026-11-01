@@ -7,7 +7,6 @@ BACKUPS = DATA / "backups"
 LOGS = DATA / "logs"
 DB_PATH = DATA / "vault.sqlite"
 SCHEMA_PATH = ROOT / "shared" / "schema.sql"
-WEB_PATH = Path(__file__).resolve().parent / "web" / "index.html"
 LOCK_PATH = DATA / "sync.lock"
 
 
